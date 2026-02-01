@@ -49,10 +49,10 @@ class SneakerViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'brand', 'description']
     ordering_fields = ['price', 'rating', 'created_at']
 
-    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
+    @method_decorator(cache_page(60 * 5))  # Cache for 5 minutes
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
+    @method_decorator(cache_page(60 * 5))  # Cache for 5 minutes
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
