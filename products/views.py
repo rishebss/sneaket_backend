@@ -1,6 +1,8 @@
 # products/views.py
 from rest_framework.pagination import PageNumberPagination
 from rest_framework import viewsets
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 from .models import Sneaker
 from .serializers import SneakerSerializer
 
@@ -27,3 +29,11 @@ class SneakerViewSet(viewsets.ModelViewSet):
     queryset = Sneaker.objects.all()
     pagination_class = CustomPagination
     serializer_class = SneakerSerializer
+
+    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
