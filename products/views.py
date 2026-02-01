@@ -1,6 +1,6 @@
-# products/views.py
 from rest_framework.pagination import PageNumberPagination
-from rest_framework import viewsets
+from rest_framework import viewsets, filters
+from django_filters.rest_framework import DjangoFilterBackend, FilterSet, CharFilter
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from .models import Sneaker
@@ -13,9 +13,23 @@ class CustomPagination(PageNumberPagination):
     max_page_size = 100
 
 
+class SneakerFilter(FilterSet):
+    features = CharFilter(method='filter_features')
+    brand = CharFilter(lookup_expr='iexact')
+    category = CharFilter(lookup_expr='iexact')
+
+    class Meta:
+        model = Sneaker
+        fields = ['brand', 'category']
+
+    def filter_features(self, queryset, name, value):
+        # Filter for Postgres JSONField containment
+        return queryset.filter(features__contains=[value])
+
+
 class SneakerViewSet(viewsets.ModelViewSet):
     """
-    Basic CRUD operations for Sneakers.
+    Basic CRUD operations for Sneakers with filtering, search, and ordering.
 
     ModelViewSet automatically provides:
     - GET /api/sneakers/          -> List all sneakers
@@ -29,6 +43,11 @@ class SneakerViewSet(viewsets.ModelViewSet):
     queryset = Sneaker.objects.all()
     pagination_class = CustomPagination
     serializer_class = SneakerSerializer
+
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = SneakerFilter
+    search_fields = ['name', 'brand', 'description']
+    ordering_fields = ['price', 'rating', 'created_at']
 
     @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
     def list(self, request, *args, **kwargs):

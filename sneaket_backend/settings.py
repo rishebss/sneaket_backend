@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'users',
     'rest_framework',
     'corsheaders',
+    'django_filters',
     'cloudinary',
     'cloudinary_storage',
     'rest_framework.authtoken',
