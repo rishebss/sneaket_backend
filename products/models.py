@@ -1,6 +1,7 @@
 from cloudinary.models import CloudinaryField  # Add this import
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.conf import settings
 
 
 class Sneaker(models.Model):
@@ -126,8 +127,6 @@ class Sneaker(models.Model):
     def save(self, *args, **kwargs):
         if not self.original_price:
             self.original_price = self.price
-        if not self.available_sizes:
-            self.available_sizes = [self.sizes]
         super().save(*args, **kwargs)
 
     @property
@@ -149,3 +148,29 @@ class Sneaker(models.Model):
         if self.img3:
             images.append(self.img3.url)
         return images
+
+
+
+class Favorite(models.Model):
+    """
+    Simple favorite model - just user and sneaker
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='favorites'
+    )
+    sneaker = models.ForeignKey(
+        Sneaker,
+        on_delete=models.CASCADE,
+        related_name='favorited_by'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Ensure a user can only favorite a sneaker once
+        unique_together = ['user', 'sneaker']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.sneaker.name}"

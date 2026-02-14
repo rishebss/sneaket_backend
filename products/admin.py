@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Sneaker
+from .models import Sneaker, Favorite
 from django.utils.html import format_html
 
 @admin.register(Sneaker)
@@ -52,3 +52,11 @@ class SneakerAdmin(admin.ModelAdmin):
     
     # Add this line to give the column a proper name
     image_preview.short_description = 'Preview'
+
+@admin.register(Favorite)
+class FavoriteAdmin(admin.ModelAdmin):
+    list_display = ['user', 'sneaker', 'created_at']
+    list_filter = ['user', 'sneaker']
+    search_fields = ['user__username', 'sneaker__name']
+    list_per_page = 20
+    

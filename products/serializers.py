@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import Sneaker
+from .models import Sneaker, Favorite
+from django.conf import settings
 
 class SneakerSerializer(serializers.ModelSerializer):
     # Override the image fields to return URLs directly
@@ -20,3 +21,18 @@ class SneakerSerializer(serializers.ModelSerializer):
     
     def get_img3(self, obj):
         return obj.img3.url if obj.img3 else None
+
+
+class FavoriteSerializer(serializers.ModelSerializer):
+    """
+    Simple favorite serializer
+    """
+    sneaker_name = serializers.CharField(source='sneaker.name', read_only=True)
+    sneaker_brand = serializers.CharField(source='sneaker.brand', read_only=True)
+    sneaker_price = serializers.DecimalField(source='sneaker.price', max_digits=10, decimal_places=2, read_only=True)
+    sneaker_image = serializers.CharField(source='sneaker.img1.url', read_only=True)
+    
+    class Meta:
+        model = Favorite
+        fields = ['id', 'sneaker', 'sneaker_name', 'sneaker_brand', 'sneaker_price', 'sneaker_image', 'created_at']
+        read_only_fields = ['id', 'created_at']     
