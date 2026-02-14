@@ -91,7 +91,7 @@ class Sneaker(models.Model):
     short_description = models.CharField(max_length=200, blank=True)
 
     # Sizes
-    sizes = models.CharField(max_length=10, choices=SIZE_CHOICES)
+    
     available_sizes = models.JSONField(
         default=list,
         help_text='List of available sizes in JSON format like ["8", "9", "10"]',

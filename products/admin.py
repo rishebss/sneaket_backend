@@ -26,7 +26,7 @@ class SneakerAdmin(admin.ModelAdmin):
             'fields': ('name', 'brand', 'category', 'description', 'short_description')
         }),
         ('Pricing & Stock', {
-            'fields': ('price', 'original_price', 'copies', 'sizes', 'available_sizes')
+            'fields': ('price', 'original_price', 'copies', 'available_sizes')
         }),
         ('Images', {
             'fields': ('img1', 'img2', 'img3', 'image_preview'),
