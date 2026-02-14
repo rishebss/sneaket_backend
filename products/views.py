@@ -2,7 +2,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework import viewsets, filters, status
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django_filters.rest_framework import DjangoFilterBackend, FilterSet, CharFilter
+from django_filters.rest_framework import DjangoFilterBackend, FilterSet, CharFilter, BooleanFilter
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from .models import Sneaker, Favorite
@@ -23,6 +23,7 @@ class SneakerFilter(FilterSet):
     features = CharFilter(method='filter_features')
     brand = CharFilter(lookup_expr='iexact')
     category = CharFilter(lookup_expr='iexact')
+    favorited = BooleanFilter(method='filter_favorited')
 
     class Meta:
         model = Sneaker
@@ -31,6 +32,11 @@ class SneakerFilter(FilterSet):
     def filter_features(self, queryset, name, value):
         # Filter for Postgres JSONField containment
         return queryset.filter(features__contains=[value])
+
+    def filter_favorited(self, queryset, name, value):
+        if value and self.request.user.is_authenticated:
+            return queryset.filter(favorited_by__user=self.request.user)
+        return queryset
 
 
 class SneakerViewSet(viewsets.ModelViewSet):
@@ -47,8 +53,13 @@ class SneakerViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Sneaker.objects.all()
-    pagination_class = CustomPagination
     serializer_class = SneakerSerializer
+
+    @property
+    def pagination_class(self):
+        if self.request.query_params.get('favorited') == 'true':
+            return None
+        return CustomPagination
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = SneakerFilter
