@@ -92,7 +92,7 @@ class Sneaker(models.Model):
     short_description = models.CharField(max_length=200, blank=True)
 
     # Sizes
-    
+
     available_sizes = models.JSONField(
         default=list,
         help_text='List of available sizes in JSON format like ["8", "9", "10"]',
@@ -150,27 +150,59 @@ class Sneaker(models.Model):
         return images
 
 
-
 class Favorite(models.Model):
     """
     Simple favorite model - just user and sneaker
     """
+
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='favorites'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="favorites"
     )
     sneaker = models.ForeignKey(
-        Sneaker,
-        on_delete=models.CASCADE,
-        related_name='favorited_by'
+        Sneaker, on_delete=models.CASCADE, related_name="favorited_by"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         # Ensure a user can only favorite a sneaker once
-        unique_together = ['user', 'sneaker']
-        ordering = ['-created_at']
+        unique_together = ["user", "sneaker"]
+        ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.user.username} - {self.sneaker.name}"
+
+
+class CartItem(models.Model):
+    """
+    Cart item - links a user to a sneaker they want to buy.
+    User and Sneaker are ForeignKeys; quantity + selected size are tracked.
+    A user can only have one line per sneaker+size combination.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cart_items"
+    )
+    sneaker = models.ForeignKey(
+        Sneaker, on_delete=models.CASCADE, related_name="in_carts"
+    )
+    size = models.CharField(
+        max_length=10,
+        choices=Sneaker.SIZE_CHOICES,
+        null=True,
+        blank=True,
+        help_text="Selected US size for this cart line",
+    )
+    quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # One line per user + sneaker + size
+        unique_together = ["user", "sneaker", "size"]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        size_label = f" (US {self.size})" if self.size else ""
+        return (
+            f"{self.user.username} - {self.sneaker.name}{size_label} x{self.quantity}"
+        )
