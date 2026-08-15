@@ -64,6 +64,7 @@ class CartItemSerializer(serializers.ModelSerializer):
         source="sneaker.original_price", max_digits=10, decimal_places=2, read_only=True
     )
     sneaker_image = serializers.CharField(source="sneaker.img1.url", read_only=True)
+    sneaker_copies = serializers.IntegerField(source="sneaker.copies", read_only=True)
     line_total = serializers.SerializerMethodField()
 
     class Meta:
@@ -76,6 +77,7 @@ class CartItemSerializer(serializers.ModelSerializer):
             "sneaker_price",
             "sneaker_original_price",
             "sneaker_image",
+            "sneaker_copies",
             "size",
             "quantity",
             "is_selected",

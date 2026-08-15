@@ -1,5 +1,5 @@
 from rest_framework.pagination import PageNumberPagination
-from rest_framework import viewsets, filters, status
+from rest_framework import viewsets, filters, status, serializers
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db.models import Sum
@@ -204,6 +204,33 @@ class CartViewSet(viewsets.ModelViewSet):
             user=self.request.user, sneaker_id=sneaker_id, size=size
         ).first()
 
+    def _available_for(self, sneaker, line_id=None):
+        """
+        Max quantity still addable for a sneaker, accounting for stock and
+        what is already reserved in the user's cart (across all sizes).
+
+        `line_id` excludes a line being edited so its own qty isn't double
+        counted. Returns 0 when sold out / fully reserved.
+        """
+        reserved = CartItem.objects.filter(user=self.request.user, sneaker=sneaker)
+        if line_id is not None:
+            reserved = reserved.exclude(id=line_id)
+        reserved = reserved.aggregate(total=Sum("quantity"))["total"] or 0
+        return max(sneaker.copies - reserved, 0)
+
+    def _check_stock(self, sneaker, requested, line_id=None):
+        """Raise a 400 ValidationError if `requested` exceeds available stock."""
+        available = self._available_for(sneaker, line_id=line_id)
+        if requested > available:
+            raise serializers.ValidationError(
+                {
+                    "error": "Not enough stock",
+                    "sneaker_id": sneaker.id,
+                    "requested": requested,
+                    "available": available,
+                }
+            )
+
     def create(self, request, *args, **kwargs):
         """
         Create a cart line. If the same user+sneaker+size already exists,
@@ -214,6 +241,10 @@ class CartViewSet(viewsets.ModelViewSet):
         quantity = int(request.data.get("quantity", 1) or 1)
 
         existing = self._resolve_line(sneaker_id, size)
+        sneaker = get_object_or_404(Sneaker, id=sneaker_id)
+        # `existing` is included in reserved stock, so check added amount
+        self._check_stock(sneaker, quantity)
+
         if existing:
             existing.quantity += quantity
             existing.save()
@@ -247,6 +278,9 @@ class CartViewSet(viewsets.ModelViewSet):
         sneaker = get_object_or_404(Sneaker, id=sneaker_id)
 
         existing = self._resolve_line(sneaker_id, size)
+        # `existing` is included in reserved stock, so check the added amount
+        self._check_stock(sneaker, quantity)
+
         if existing:
             existing.quantity += quantity
             existing.save()
@@ -266,6 +300,28 @@ class CartViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+    def partial_update(self, request, *args, **kwargs):
+        """
+        PATCH a cart line. Validate the new absolute quantity against stock
+        (excluding this line's own reserved qty).
+        """
+        line = self.get_object()
+        if "quantity" in request.data:
+            try:
+                new_quantity = int(request.data.get("quantity"))
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "quantity must be an integer"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if new_quantity < 1:
+                return Response(
+                    {"error": "quantity must be at least 1"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            self._check_stock(line.sneaker, new_quantity, line_id=line.id)
+        return super().partial_update(request, *args, **kwargs)
 
     @action(detail=False, methods=["post"])
     def remove(self, request):
