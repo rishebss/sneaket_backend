@@ -78,6 +78,7 @@ class CartItemSerializer(serializers.ModelSerializer):
             "sneaker_image",
             "size",
             "quantity",
+            "is_selected",
             "line_total",
             "created_at",
         ]

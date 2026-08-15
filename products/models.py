@@ -193,6 +193,9 @@ class CartItem(models.Model):
         help_text="Selected US size for this cart line",
     )
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    is_selected = models.BooleanField(
+        default=True, help_text="Whether this line is selected for checkout"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
