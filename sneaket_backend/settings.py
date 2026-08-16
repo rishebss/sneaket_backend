@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-p^a*l)s95etvl1to))$b%r0%4k@)&r_heo#ss@9=z$_#bcuc-^'
+SECRET_KEY = "django-insecure-p^a*l)s95etvl1to))$b%r0%4k@)&r_heo#ss@9=z$_#bcuc-^"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -32,40 +32,40 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'products',
-    'users',
-    'rest_framework',
-    'corsheaders',
-    'django_filters',
-    'cloudinary',
-    'cloudinary_storage',
-    'rest_framework.authtoken',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "products",
+    "orders",
+    "users",
+    "rest_framework",
+    "corsheaders",
+    "django_filters",
+    "cloudinary",
+    "cloudinary_storage",
+    "rest_framework.authtoken",
 ]
 
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        
-        'rest_framework.authentication.TokenAuthentication',  # For API auth
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",  # For API auth
     ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticatedOrReadOnly",
     ],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 10,
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 10,
 }
 
 # Authentication URLs
-LOGIN_URL = '/users/login/'
-LOGIN_REDIRECT_URL = '/'
-LOGOUT_REDIRECT_URL = '/'
+LOGIN_URL = "/users/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
 
 # CORS settings (for React frontend)
 CORS_ALLOWED_ORIGINS = [
@@ -79,34 +79,34 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = 'sneaket_backend.urls'
+ROOT_URLCONF = "sneaket_backend.urls"
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
-WSGI_APPLICATION = 'sneaket_backend.wsgi.application'
+WSGI_APPLICATION = "sneaket_backend.wsgi.application"
 
 
 # Database
@@ -120,18 +120,19 @@ WSGI_APPLICATION = 'sneaket_backend.wsgi.application'
 # }
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'neondb',
-        'USER': 'neondb_owner',
-        'PASSWORD': 'npg_VnJYZ4S0vtfO',
-        'HOST': 'ep-jolly-lake-a17vp26a-pooler.ap-southeast-1.aws.neon.tech',
-        'PORT': '5432',
-        'OPTIONS': {'sslmode': 'require'},
-        'CONN_MAX_AGE': 0, 
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "neondb",
+        "USER": "neondb_owner",
+        "PASSWORD": "npg_VnJYZ4S0vtfO",
+        "HOST": "ep-jolly-lake-a17vp26a-pooler.ap-southeast-1.aws.neon.tech",
+        "PORT": "5432",
+        "OPTIONS": {"sslmode": "require"},
+        "CONN_MAX_AGE": 0,
     }
 }
 
@@ -140,21 +141,23 @@ import cloudinary.uploader
 import cloudinary.api
 
 cloudinary.config(
-    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME', 'dviwae8cc'),
-    api_key=os.environ.get('CLOUDINARY_API_KEY', '233398169684231'),
-    api_secret=os.environ.get('CLOUDINARY_API_SECRET', 'bBmNwo2EukoS5dUAgjznOZh8O1c'),
-    secure=True
+    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME", "dviwae8cc"),
+    api_key=os.environ.get("CLOUDINARY_API_KEY", "233398169684231"),
+    api_secret=os.environ.get("CLOUDINARY_API_SECRET", "bBmNwo2EukoS5dUAgjznOZh8O1c"),
+    secure=True,
 )
 
 CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME', 'dviwae8cc'),
-    'API_KEY': os.environ.get('CLOUDINARY_API_KEY', '233398169684231'),
-    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET', 'bBmNwo2EukoS5dUAgjznOZh8O1c'),
-    'SECURE': True,
+    "CLOUD_NAME": os.environ.get("CLOUDINARY_CLOUD_NAME", "dviwae8cc"),
+    "API_KEY": os.environ.get("CLOUDINARY_API_KEY", "233398169684231"),
+    "API_SECRET": os.environ.get(
+        "CLOUDINARY_API_SECRET", "bBmNwo2EukoS5dUAgjznOZh8O1c"
+    ),
+    "SECURE": True,
 }
 
 # Media settings
-DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
 
 
 # Password validation
@@ -162,16 +165,16 @@ DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
 
@@ -179,9 +182,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = "UTC"
 
 USE_I18N = True
 
@@ -192,8 +195,12 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 
-STATIC_URL = '/static/'
-STATICFILES_STORAGE = 'cloudinary_storage.storage.StaticHashedCloudinaryStorage'
+STATIC_URL = "/static/"
+STATICFILES_STORAGE = "cloudinary_storage.storage.StaticHashedCloudinaryStorage"
+
+# Razorpay (test mode keys)
+RAZORPAY_KEY_ID = "rzp_test_dTWp25pBQ5jW81"
+RAZORPAY_KEY_SECRET = "Sg6ymJfWNf4atGBsqXhuaALE"
 
 # Caching Configuration
 CACHES = {
