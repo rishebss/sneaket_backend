@@ -89,3 +89,24 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.sneaker_name} x{self.quantity}"
+
+
+class PendingCheckout(models.Model):
+    """
+    Transient snapshot of a checkout that has a Razorpay order created but is
+    NOT yet a registered Order. Promoted to an Order only after the payment
+    signature is verified. Never shown in "My Orders" or admin.
+    """
+
+    razorpay_order_id = models.CharField(max_length=100, unique=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="pending_checkouts",
+    )
+    amount = models.IntegerField(help_text="Amount in paise")
+    snapshot = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Pending {self.razorpay_order_id} - {self.user.username}"

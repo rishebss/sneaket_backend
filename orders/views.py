@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from .models import Order, OrderItem
+from .models import Order, OrderItem, PendingCheckout
 from .serializers import (
     OrderSerializer,
     CreateOrderSerializer,
@@ -82,8 +82,6 @@ class OrdersView(APIView):
         shipping_fee = Decimal("0")
         total = subtotal + shipping_fee
 
-        order_number = generate_order_number()
-
         # Create the Razorpay order (amount in paise)
         try:
             rzp_order = razorpay_client.order.create(
@@ -100,46 +98,53 @@ class OrdersView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        order = Order.objects.create(
-            order_number=order_number,
-            user=request.user,
-            recipient_name=data["recipient_name"],
-            email=data["email"],
-            phone=data.get("phone", ""),
-            address=data["address"],
-            pincode=data.get("pincode", ""),
-            city=data.get("city", ""),
-            state=data.get("state", ""),
-            payment_method="online",
-            payment_status="pending",
-            status="pending_payment",
-            subtotal=subtotal,
-            shipping_fee=shipping_fee,
-            total=total,
-            razorpay_order_id=razorpay_order_id,
-            cart_item_ids=[ci.id for ci in cart_items],
-        )
-
+        # Hold a transient snapshot — NO Order is registered yet.
+        items_snapshot = []
+        cart_item_ids = []
         for ci in cart_items:
-            OrderItem.objects.create(
-                order=order,
-                sneaker=ci.sneaker,
-                sneaker_name=ci.sneaker.name,
-                sneaker_image=ci.sneaker.image_list[0] if ci.sneaker.image_list else "",
-                size=ci.size or "",
-                quantity=ci.quantity,
-                unit_price=ci.sneaker.price,
-                line_total=ci.sneaker.price * ci.quantity,
+            items_snapshot.append(
+                {
+                    "sneaker_id": ci.sneaker_id,
+                    "sneaker_name": ci.sneaker.name,
+                    "sneaker_image": (
+                        ci.sneaker.image_list[0] if ci.sneaker.image_list else ""
+                    ),
+                    "size": ci.size or "",
+                    "quantity": ci.quantity,
+                    "unit_price": str(ci.sneaker.price),
+                    "line_total": str(ci.sneaker.price * ci.quantity),
+                }
             )
+            cart_item_ids.append(ci.id)
+
+        snapshot = {
+            "recipient_name": data["recipient_name"],
+            "email": data["email"],
+            "phone": data.get("phone", ""),
+            "address": data["address"],
+            "pincode": data.get("pincode", ""),
+            "city": data.get("city", ""),
+            "state": data.get("state", ""),
+            "subtotal": str(subtotal),
+            "shipping_fee": str(shipping_fee),
+            "total": str(total),
+            "items": items_snapshot,
+            "cart_item_ids": cart_item_ids,
+        }
+
+        PendingCheckout.objects.create(
+            razorpay_order_id=razorpay_order_id,
+            user=request.user,
+            amount=int(total * 100),
+            snapshot=snapshot,
+        )
 
         return Response(
             {
-                "order_number": order.order_number,
-                "razorpay_order_id": order.razorpay_order_id,
+                "razorpay_order_id": razorpay_order_id,
                 "razorpay_key": settings.RAZORPAY_KEY_ID,
                 "amount": int(total * 100),
                 "currency": "INR",
-                "order": OrderSerializer(order).data,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -154,18 +159,24 @@ class VerifyPaymentView(APIView):
         d = serializer.validated_data
 
         try:
-            order = Order.objects.get(order_number=d["order_number"], user=request.user)
-        except Order.DoesNotExist:
+            pending = PendingCheckout.objects.get(
+                razorpay_order_id=d["razorpay_order_id"], user=request.user
+            )
+        except PendingCheckout.DoesNotExist:
             return Response(
-                {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
+                {"error": "Checkout session not found"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Idempotency: already fulfilled
-        if order.payment_status == "paid":
+        # Idempotency: if this payment was already fulfilled, return success
+        existing = Order.objects.filter(
+            razorpay_payment_id=d["razorpay_payment_id"]
+        ).first()
+        if existing:
             return Response(
                 {
                     "success": True,
-                    "order_number": order.order_number,
+                    "order_number": existing.order_number,
                     "already_paid": True,
                 }
             )
@@ -185,35 +196,57 @@ class VerifyPaymentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Only NOW register the real Order (paid + confirmed)
+        snap = pending.snapshot
         with transaction.atomic():
-            # Re-fetch under lock for safe concurrent handling
-            order = Order.objects.select_for_update().get(id=order.id)
-            if order.payment_status == "paid":
-                return Response(
-                    {
-                        "success": True,
-                        "order_number": order.order_number,
-                        "already_paid": True,
-                    }
+            order = Order.objects.create(
+                order_number=generate_order_number(),
+                user=request.user,
+                recipient_name=snap["recipient_name"],
+                email=snap["email"],
+                phone=snap.get("phone", ""),
+                address=snap["address"],
+                pincode=snap.get("pincode", ""),
+                city=snap.get("city", ""),
+                state=snap.get("state", ""),
+                payment_method="online",
+                payment_status="paid",
+                status="confirmed",
+                subtotal=Decimal(snap["subtotal"]),
+                shipping_fee=Decimal(snap["shipping_fee"]),
+                total=Decimal(snap["total"]),
+                razorpay_order_id=pending.razorpay_order_id,
+                razorpay_payment_id=d["razorpay_payment_id"],
+                razorpay_signature=d["razorpay_signature"],
+                cart_item_ids=snap.get("cart_item_ids", []),
+            )
+
+            for it in snap["items"]:
+                OrderItem.objects.create(
+                    order=order,
+                    sneaker_id=it["sneaker_id"],
+                    sneaker_name=it["sneaker_name"],
+                    sneaker_image=it.get("sneaker_image", ""),
+                    size=it.get("size", ""),
+                    quantity=it["quantity"],
+                    unit_price=Decimal(it["unit_price"]),
+                    line_total=Decimal(it["line_total"]),
                 )
 
-            order.payment_status = "paid"
-            order.status = "confirmed"
-            order.razorpay_payment_id = d["razorpay_payment_id"]
-            order.razorpay_signature = d["razorpay_signature"]
-            order.save()
-
             # Decrement stock only after a verified payment
-            for item in order.items.select_related("sneaker").all():
-                sneaker = Sneaker.objects.select_for_update().get(id=item.sneaker_id)
-                sneaker.copies = max(sneaker.copies - item.quantity, 0)
+            for it in snap["items"]:
+                sneaker = Sneaker.objects.select_for_update().get(id=it["sneaker_id"])
+                sneaker.copies = max(sneaker.copies - it["quantity"], 0)
                 sneaker.save(update_fields=["copies", "updated_at"])
 
             # Clear only the selected cart lines that went into this order
-            if order.cart_item_ids:
+            if snap.get("cart_item_ids"):
                 CartItem.objects.filter(
-                    user=request.user, id__in=order.cart_item_ids
+                    user=request.user, id__in=snap["cart_item_ids"]
                 ).delete()
+
+            # The pending snapshot is consumed
+            pending.delete()
 
         return Response({"success": True, "order_number": order.order_number})
 

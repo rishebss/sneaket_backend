@@ -56,7 +56,6 @@ class CreateOrderSerializer(serializers.Serializer):
 
 
 class VerifyPaymentSerializer(serializers.Serializer):
-    order_number = serializers.CharField()
     razorpay_order_id = serializers.CharField()
     razorpay_payment_id = serializers.CharField()
     razorpay_signature = serializers.CharField()
