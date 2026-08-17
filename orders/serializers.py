@@ -40,6 +40,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "total",
             "razorpay_order_id",
             "created_at",
+            "cancellation_requested_at",
+            "cancellation_approved_at",
+            "cancellation_reason",
             "items",
         ]
 

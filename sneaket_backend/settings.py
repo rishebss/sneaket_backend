@@ -32,6 +32,9 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.forms",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -94,7 +97,7 @@ ROOT_URLCONF = "sneaket_backend.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -208,4 +211,13 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "LOCATION": "unique-snowflake",
     }
+}
+
+# Django Unfold admin theme
+UNFOLD = {
+    "SITE_TITLE": "SNEAKET ADMIN",
+    "SITE_HEADER": "SNEAKET ADMIN",
+    "SITE_SUBHEADER": "SNEAKET ADMINISTRATION",
+    "SHOW_HISTORY": True,
+    "SHOW_VIEW_ON_SITE": False,
 }

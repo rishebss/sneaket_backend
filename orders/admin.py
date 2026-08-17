@@ -1,5 +1,39 @@
 from django.contrib import admin
+from django.db import transaction
+from django.utils import timezone
+
+from products.models import Sneaker
 from .models import Order, OrderItem, PendingCheckout
+
+
+@admin.action(description="Approve cancellation & restock inventory")
+def approve_cancellation(modeladmin, request, queryset):
+    for order in queryset.filter(status="cancellation_requested"):
+        with transaction.atomic():
+            for item in order.items.select_related("sneaker").select_for_update():
+                sneaker = Sneaker.objects.select_for_update().get(id=item.sneaker_id)
+                sneaker.copies = sneaker.copies + item.quantity
+                sneaker.save(update_fields=["copies", "updated_at"])
+            order.status = "cancellation_approved"
+            order.cancellation_approved_at = timezone.now()
+            if order.payment_status == "paid":
+                order.payment_status = "refunded"
+            order.save(
+                update_fields=[
+                    "status",
+                    "cancellation_approved_at",
+                    "payment_status",
+                    "updated_at",
+                ]
+            )
+
+
+@admin.action(description="Deny cancellation request")
+def deny_cancellation(modeladmin, request, queryset):
+    for order in queryset.filter(status="cancellation_requested"):
+        order.status = "confirmed"
+        order.cancellation_reason = ""
+        order.save(update_fields=["status", "cancellation_reason", "updated_at"])
 
 
 class OrderItemInline(admin.TabularInline):
@@ -39,9 +73,12 @@ class OrderAdmin(admin.ModelAdmin):
         "subtotal",
         "shipping_fee",
         "total",
+        "cancellation_requested_at",
+        "cancellation_approved_at",
         "created_at",
         "updated_at",
     )
+    actions = [approve_cancellation, deny_cancellation]
     inlines = [OrderItemInline]
     ordering = ("-created_at",)
 

@@ -9,6 +9,8 @@ class Order(models.Model):
         ("processing", "Processing"),
         ("shipped", "Shipped"),
         ("delivered", "Delivered"),
+        ("cancellation_requested", "Cancellation Requested"),
+        ("cancellation_approved", "Cancellation Approved"),
         ("cancelled", "Cancelled"),
         ("refunded", "Refunded"),
     ]
@@ -48,7 +50,7 @@ class Order(models.Model):
         max_length=10, choices=PAYMENT_STATUS_CHOICES, default="pending"
     )
     status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default="pending_payment"
+        max_length=30, choices=STATUS_CHOICES, default="pending_payment"
     )
 
     # Pricing snapshot
@@ -63,6 +65,11 @@ class Order(models.Model):
 
     # Cart lines cleared after a successful payment (only the selected ones)
     cart_item_ids = models.JSONField(default=list, blank=True)
+
+    # Cancellation flow
+    cancellation_requested_at = models.DateTimeField(null=True, blank=True)
+    cancellation_approved_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.TextField(blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

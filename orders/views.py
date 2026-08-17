@@ -6,7 +6,7 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 
 from .models import Order, OrderItem, PendingCheckout
 from .serializers import (
@@ -263,4 +263,106 @@ class OrderDetailView(APIView):
             return Response(
                 {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
             )
-        return Response(OrderSerializer(order).data)
+            return Response(OrderSerializer(order).data)
+
+
+# Statuses from which a user may raise a cancellation request
+CANCELABLE_STATUSES = ("confirmed", "processing", "shipped")
+
+
+class RequestCancelView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, order_number):
+        try:
+            order = Order.objects.get(order_number=order_number, user=request.user)
+        except Order.DoesNotExist:
+            return Response(
+                {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if order.status not in CANCELABLE_STATUSES:
+            return Response(
+                {
+                    "error": "This order cannot be cancelled at its current stage",
+                    "status": order.status,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.status = "cancellation_requested"
+        order.cancellation_requested_at = timezone.now()
+        reason = (request.data.get("reason") or "").strip()
+        if reason:
+            order.cancellation_reason = reason
+        order.save(
+            update_fields=[
+                "status",
+                "cancellation_requested_at",
+                "cancellation_reason",
+                "updated_at",
+            ]
+        )
+        return Response({"success": True, "status": order.status})
+
+
+class ApproveCancelView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, order_number):
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            return Response(
+                {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if order.status != "cancellation_requested":
+            return Response(
+                {"error": "No pending cancellation request for this order"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            # Restock the sold inventory exactly once
+            for item in order.items.select_related("sneaker").select_for_update():
+                sneaker = Sneaker.objects.select_for_update().get(id=item.sneaker_id)
+                sneaker.copies = sneaker.copies + item.quantity
+                sneaker.save(update_fields=["copies", "updated_at"])
+
+            order.status = "cancellation_approved"
+            order.cancellation_approved_at = timezone.now()
+            if order.payment_status == "paid":
+                order.payment_status = "refunded"
+            order.save(
+                update_fields=[
+                    "status",
+                    "cancellation_approved_at",
+                    "payment_status",
+                    "updated_at",
+                ]
+            )
+        return Response({"success": True, "status": order.status})
+
+
+class DenyCancelView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, order_number):
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            return Response(
+                {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if order.status != "cancellation_requested":
+            return Response(
+                {"error": "No pending cancellation request for this order"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.status = "confirmed"
+        order.cancellation_reason = ""
+        order.save(update_fields=["status", "cancellation_reason", "updated_at"])
+        return Response({"success": True, "status": order.status})
