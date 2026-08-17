@@ -6,6 +6,7 @@ from .views import (
     RequestCancelView,
     ApproveCancelView,
     DenyCancelView,
+    RefundToWalletView,
 )
 
 urlpatterns = [
@@ -15,4 +16,5 @@ urlpatterns = [
     path("<str:order_number>/request-cancel/", RequestCancelView.as_view()),
     path("<str:order_number>/approve-cancel/", ApproveCancelView.as_view()),
     path("<str:order_number>/deny-cancel/", DenyCancelView.as_view()),
+    path("<str:order_number>/refund-to-wallet/", RefundToWalletView.as_view()),
 ]

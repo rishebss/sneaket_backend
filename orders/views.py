@@ -15,6 +15,7 @@ from .serializers import (
     VerifyPaymentSerializer,
 )
 from products.models import Sneaker, CartItem
+from wallet.models import Wallet, WalletTransaction
 
 razorpay_client = razorpay.Client(
     auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
@@ -82,23 +83,9 @@ class OrdersView(APIView):
         shipping_fee = Decimal("0")
         total = subtotal + shipping_fee
 
-        # Create the Razorpay order (amount in paise)
-        try:
-            rzp_order = razorpay_client.order.create(
-                {
-                    "amount": int(total * 100),
-                    "currency": "INR",
-                    "payment_capture": 1,
-                }
-            )
-            razorpay_order_id = rzp_order["id"]
-        except Exception as e:
-            return Response(
-                {"error": f"Payment gateway error: {str(e)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        payment_method = (request.data.get("payment_method") or "online").lower()
 
-        # Hold a transient snapshot — NO Order is registered yet.
+        # Build the item/price snapshot (shared by both payment paths)
         items_snapshot = []
         cart_item_ids = []
         for ci in cart_items:
@@ -131,6 +118,99 @@ class OrdersView(APIView):
             "items": items_snapshot,
             "cart_item_ids": cart_item_ids,
         }
+
+        # ---- Wallet payment: pay immediately from wallet balance ----
+        if payment_method == "wallet":
+            wallet, _ = Wallet.objects.get_or_create(user=request.user)
+
+            with transaction.atomic():
+                wallet = Wallet.objects.select_for_update().get(id=wallet.id)
+                if wallet.balance < total:
+                    return Response(
+                        {
+                            "error": "Insufficient wallet balance",
+                            "balance": str(wallet.balance),
+                            "required": str(total),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                order = Order.objects.create(
+                    order_number=generate_order_number(),
+                    user=request.user,
+                    recipient_name=data["recipient_name"],
+                    email=data["email"],
+                    phone=data.get("phone", ""),
+                    address=data["address"],
+                    pincode=data.get("pincode", ""),
+                    city=data.get("city", ""),
+                    state=data.get("state", ""),
+                    payment_method="wallet",
+                    payment_status="paid",
+                    status="confirmed",
+                    subtotal=Decimal(snapshot["subtotal"]),
+                    shipping_fee=Decimal(snapshot["shipping_fee"]),
+                    total=Decimal(snapshot["total"]),
+                    cart_item_ids=snapshot["cart_item_ids"],
+                )
+
+                for it in items_snapshot:
+                    OrderItem.objects.create(
+                        order=order,
+                        sneaker_id=it["sneaker_id"],
+                        sneaker_name=it["sneaker_name"],
+                        sneaker_image=it.get("sneaker_image", ""),
+                        size=it.get("size", ""),
+                        quantity=it["quantity"],
+                        unit_price=Decimal(it["unit_price"]),
+                        line_total=Decimal(it["line_total"]),
+                    )
+
+                # Deduct the wallet balance
+                wallet.balance = wallet.balance - total
+                wallet.save(update_fields=["balance", "updated_at"])
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    type="debit",
+                    amount=total,
+                    reason="purchase",
+                    reference=order.order_number,
+                )
+
+                # Decrement stock only after a confirmed wallet payment
+                for it in items_snapshot:
+                    sneaker = Sneaker.objects.select_for_update().get(
+                        id=it["sneaker_id"]
+                    )
+                    sneaker.copies = max(sneaker.copies - it["quantity"], 0)
+                    sneaker.save(update_fields=["copies", "updated_at"])
+
+                # Clear only the selected cart lines
+                if cart_item_ids:
+                    CartItem.objects.filter(
+                        user=request.user, id__in=cart_item_ids
+                    ).delete()
+
+            return Response(
+                {"order_number": order.order_number, "success": True},
+                status=status.HTTP_201_CREATED,
+            )
+
+        # ---- Online (Razorpay) payment: deferred until signature verified ----
+        try:
+            rzp_order = razorpay_client.order.create(
+                {
+                    "amount": int(total * 100),
+                    "currency": "INR",
+                    "payment_capture": 1,
+                }
+            )
+            razorpay_order_id = rzp_order["id"]
+        except Exception as e:
+            return Response(
+                {"error": f"Payment gateway error: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         PendingCheckout.objects.create(
             razorpay_order_id=razorpay_order_id,
@@ -332,13 +412,11 @@ class ApproveCancelView(APIView):
 
             order.status = "cancellation_approved"
             order.cancellation_approved_at = timezone.now()
-            if order.payment_status == "paid":
-                order.payment_status = "refunded"
+
             order.save(
                 update_fields=[
                     "status",
                     "cancellation_approved_at",
-                    "payment_status",
                     "updated_at",
                 ]
             )
@@ -366,3 +444,44 @@ class DenyCancelView(APIView):
         order.cancellation_reason = ""
         order.save(update_fields=["status", "cancellation_reason", "updated_at"])
         return Response({"success": True, "status": order.status})
+
+
+class RefundToWalletView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, order_number):
+        try:
+            order = Order.objects.get(order_number=order_number, user=request.user)
+        except Order.DoesNotExist:
+            return Response(
+                {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if order.status == "refunded":
+            return Response({"success": True, "already_refunded": True})
+
+        if order.status != "cancellation_approved":
+            return Response(
+                {"error": "This order is not approved for a refund yet"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            wallet, _ = Wallet.objects.get_or_create(user=order.user)
+            wallet = Wallet.objects.select_for_update().get(id=wallet.id)
+            wallet.balance = wallet.balance + order.total
+            wallet.save(update_fields=["balance", "updated_at"])
+
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                type="credit",
+                amount=order.total,
+                reason="refund",
+                reference=order.order_number,
+            )
+
+            order.status = "refunded"
+            order.payment_status = "refunded"
+            order.save(update_fields=["status", "payment_status", "updated_at"])
+
+        return Response({"success": True, "amount": str(order.total)})

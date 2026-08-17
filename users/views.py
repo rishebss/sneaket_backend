@@ -1,4 +1,7 @@
 # users/views.py
+from decimal import Decimal
+from django.utils import timezone
+from django.db import transaction
 from rest_framework import status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -6,6 +9,7 @@ from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
+from wallet.models import Wallet, WalletTransaction
 from .models import UserProfile
 from .serializers import (
     UserSerializer,
@@ -13,6 +17,32 @@ from .serializers import (
     LoginSerializer,
     UserProfileSerializer,
 )
+
+DAILY_REWARD_AMOUNT = Decimal("25")
+
+
+def grant_daily_reward(user):
+    """Credit the user ₹25 once per local day. Returns True if rewarded."""
+    profile = getattr(user, "profile", None)
+    if profile is None:
+        return False
+    today = timezone.localdate()
+    if profile.last_reward_date == today:
+        return False
+    with transaction.atomic():
+        wallet, _ = Wallet.objects.get_or_create(user=user)
+        wallet.balance = wallet.balance + DAILY_REWARD_AMOUNT
+        wallet.save(update_fields=["balance", "updated_at"])
+        WalletTransaction.objects.create(
+            wallet=wallet,
+            type="credit",
+            amount=DAILY_REWARD_AMOUNT,
+            reason="daily_reward",
+            reference=f"daily-{today.isoformat()}",
+        )
+        profile.last_reward_date = today
+        profile.save(update_fields=["last_reward_date", "updated_at"])
+    return True
 
 
 class RegisterView(APIView):
@@ -95,8 +125,27 @@ class CurrentUserView(APIView):
 
     def get(self, request):
         user = request.user
+        profile = getattr(user, "profile", None)
+        reward_claimed = bool(
+            profile and profile.last_reward_date == timezone.localdate()
+        )
         serializer = UserSerializer(user)
-        return Response(serializer.data)
+        return Response({**serializer.data, "daily_reward_claimed": reward_claimed})
+
+
+class ClaimDailyRewardView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        claimed = grant_daily_reward(request.user)
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        return Response(
+            {
+                "claimed": claimed,
+                "balance": str(wallet.balance),
+                "already_claimed": not claimed,
+            }
+        )
 
 
 class UpdateProfileView(APIView):

@@ -16,13 +16,10 @@ def approve_cancellation(modeladmin, request, queryset):
                 sneaker.save(update_fields=["copies", "updated_at"])
             order.status = "cancellation_approved"
             order.cancellation_approved_at = timezone.now()
-            if order.payment_status == "paid":
-                order.payment_status = "refunded"
             order.save(
                 update_fields=[
                     "status",
                     "cancellation_approved_at",
-                    "payment_status",
                     "updated_at",
                 ]
             )

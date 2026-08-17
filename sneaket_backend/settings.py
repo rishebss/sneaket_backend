@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "products",
     "orders",
     "users",
+    "wallet",
     "rest_framework",
     "corsheaders",
     "django_filters",

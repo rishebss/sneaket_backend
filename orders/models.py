@@ -17,6 +17,7 @@ class Order(models.Model):
     PAYMENT_METHOD_CHOICES = [
         ("cod", "Cash on Delivery"),
         ("online", "Online (Razorpay)"),
+        ("wallet", "Wallet"),
     ]
     PAYMENT_STATUS_CHOICES = [
         ("pending", "Pending"),
