@@ -158,6 +158,8 @@ class UpdateProfileView(APIView):
 
         if serializer.is_valid():
             serializer.save()
+            # Keep the default (primary) address in sync with account details
+            _sync_profile_to_default_address(user, user.profile)
             return Response(
                 {
                     "message": "Profile updated successfully",
@@ -193,6 +195,44 @@ class ChangePasswordView(APIView):
         user.save()
 
         return Response({"message": "Password changed successfully"})
+
+
+def _sync_profile_to_default_address(user, profile):
+    """Keep the user's default (primary) address in sync with account details."""
+    recipient_name = f"{user.first_name} {user.last_name}".strip()
+    addr_fields = {
+        "recipient_name": recipient_name,
+        "phone": profile.phone or "",
+        "address": profile.address or "",
+        "pincode": profile.pincode or "",
+        "city": profile.city or "",
+        "state": profile.state or "",
+    }
+    default_addr = Address.objects.filter(user=user, is_default=True).first()
+    if default_addr:
+        for k, v in addr_fields.items():
+            setattr(default_addr, k, v)
+        default_addr.save()
+    else:
+        Address.objects.create(user=user, label="Home", is_default=True, **addr_fields)
+
+
+def _sync_address_to_profile(user, addr):
+    """Write a default address's details back into the account profile."""
+    profile = user.profile
+    profile.phone = addr.phone or profile.phone
+    profile.address = addr.address or profile.address
+    profile.pincode = addr.pincode or profile.pincode
+    profile.city = addr.city or profile.city
+    profile.state = addr.state or profile.state
+    profile.save(
+        update_fields=["phone", "address", "pincode", "city", "state", "updated_at"]
+    )
+    name_parts = (addr.recipient_name or "").split()
+    if name_parts:
+        user.first_name = name_parts[0]
+        user.last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+        user.save(update_fields=["first_name", "last_name"])
 
 
 class AddressView(APIView):
@@ -237,6 +277,8 @@ class AddressView(APIView):
             state=data.get("state", ""),
             is_default=make_default,
         )
+        if addr.is_default:
+            _sync_address_to_profile(request.user, addr)
         return Response(AddressSerializer(addr).data, status=status.HTTP_201_CREATED)
 
 
@@ -271,6 +313,8 @@ class AddressDetailView(APIView):
             )
             addr.is_default = True
         addr.save()
+        if addr.is_default:
+            _sync_address_to_profile(request.user, addr)
         return Response(AddressSerializer(addr).data)
 
     def delete(self, request, pk):
