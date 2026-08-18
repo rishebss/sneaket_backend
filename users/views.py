@@ -10,12 +10,13 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from wallet.models import Wallet, WalletTransaction
-from .models import UserProfile
+from .models import UserProfile, Address
 from .serializers import (
     UserSerializer,
     UserUpdateSerializer,
     LoginSerializer,
     UserProfileSerializer,
+    AddressSerializer,
 )
 
 DAILY_REWARD_AMOUNT = Decimal("25")
@@ -192,3 +193,99 @@ class ChangePasswordView(APIView):
         user.save()
 
         return Response({"message": "Password changed successfully"})
+
+
+class AddressView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        qs = Address.objects.filter(user=request.user)
+        # Seed a default address from the legacy profile fields on first use
+        if not qs.exists():
+            profile = request.user.profile
+            Address.objects.create(
+                user=request.user,
+                label="Home",
+                recipient_name=(
+                    f"{request.user.first_name} {request.user.last_name}"
+                ).strip(),
+                phone=profile.phone or "",
+                address=profile.address or "",
+                pincode=profile.pincode or "",
+                city=profile.city or "",
+                state=profile.state or "",
+                is_default=True,
+            )
+            qs = Address.objects.filter(user=request.user)
+        return Response(AddressSerializer(qs, many=True).data)
+
+    def post(self, request):
+        data = request.data
+        make_default = bool(data.get("is_default"))
+        if make_default:
+            Address.objects.filter(user=request.user, is_default=True).update(
+                is_default=False
+            )
+        addr = Address.objects.create(
+            user=request.user,
+            label=data.get("label", ""),
+            recipient_name=data.get("recipient_name", ""),
+            phone=data.get("phone", ""),
+            address=data.get("address", ""),
+            pincode=data.get("pincode", ""),
+            city=data.get("city", ""),
+            state=data.get("state", ""),
+            is_default=make_default,
+        )
+        return Response(AddressSerializer(addr).data, status=status.HTTP_201_CREATED)
+
+
+class AddressDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _get(self, request, pk):
+        return Address.objects.filter(pk=pk, user=request.user).first()
+
+    def patch(self, request, pk):
+        addr = self._get(request, pk)
+        if not addr:
+            return Response({"error": "Not found"}, status=404)
+        data = request.data
+        if "label" in data:
+            addr.label = data["label"]
+        if "recipient_name" in data:
+            addr.recipient_name = data.get("recipient_name", "")
+        if "phone" in data:
+            addr.phone = data.get("phone", "")
+        if "address" in data:
+            addr.address = data.get("address", "")
+        if "pincode" in data:
+            addr.pincode = data.get("pincode", "")
+        if "city" in data:
+            addr.city = data.get("city", "")
+        if "state" in data:
+            addr.state = data.get("state", "")
+        if data.get("is_default"):
+            Address.objects.filter(user=request.user, is_default=True).update(
+                is_default=False
+            )
+            addr.is_default = True
+        addr.save()
+        return Response(AddressSerializer(addr).data)
+
+    def delete(self, request, pk):
+        addr = self._get(request, pk)
+        if not addr:
+            return Response({"error": "Not found"}, status=404)
+        was_default = addr.is_default
+        addr.delete()
+        if was_default:
+            nxt = (
+                Address.objects.filter(user=request.user)
+                .order_by("-created_at")
+                .first()
+            )
+            if nxt:
+                nxt.is_default = True
+                nxt.save()
+        return Response({"success": True})

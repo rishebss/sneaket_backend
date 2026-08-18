@@ -30,6 +30,25 @@ class UserProfile(models.Model):
         ordering = ["-created_at"]
 
 
+class Address(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="addresses")
+    label = models.CharField(max_length=50, blank=True, default="")
+    recipient_name = models.CharField(max_length=255, blank=True, default="")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    pincode = models.CharField(max_length=10, blank=True, default="")
+    city = models.CharField(max_length=100, blank=True, default="")
+    state = models.CharField(max_length=100, blank=True, default="")
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-is_default", "-created_at"]
+
+    def __str__(self):
+        return f"{self.label or 'Address'} - {self.user.username}"
+
+
 # Signal to create/update UserProfile when User is created/updated
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):

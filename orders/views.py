@@ -16,6 +16,7 @@ from .serializers import (
 )
 from products.models import Sneaker, CartItem
 from wallet.models import Wallet, WalletTransaction
+from users.models import Address
 
 razorpay_client = razorpay.Client(
     auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
@@ -43,6 +44,22 @@ class OrdersView(APIView):
         serializer = CreateOrderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+
+        # Prefer a saved address when selected (server-authoritative)
+        address_id = request.data.get("address_id")
+        if address_id:
+            selected = Address.objects.filter(pk=address_id, user=request.user).first()
+            if selected:
+                data["recipient_name"] = (
+                    selected.recipient_name
+                    or f"{request.user.first_name} {request.user.last_name}".strip()
+                )
+                data["email"] = request.user.email
+                data["phone"] = selected.phone
+                data["address"] = selected.address
+                data["pincode"] = selected.pincode
+                data["city"] = selected.city
+                data["state"] = selected.state
 
         # Build the order only from the items the user marked for checkout
         cart_items = list(

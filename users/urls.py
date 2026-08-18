@@ -7,6 +7,8 @@ from .views import (
     UpdateProfileView,
     ChangePasswordView,
     ClaimDailyRewardView,
+    AddressView,
+    AddressDetailView,
 )
 
 urlpatterns = [
@@ -19,4 +21,6 @@ urlpatterns = [
     ),
     path("profile", UpdateProfileView.as_view(), name="update-profile"),
     path("change-password", ChangePasswordView.as_view(), name="change-password"),
+    path("addresses", AddressView.as_view(), name="addresses"),
+    path("addresses/<int:pk>", AddressDetailView.as_view(), name="address-detail"),
 ]
