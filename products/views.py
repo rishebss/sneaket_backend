@@ -1,4 +1,12 @@
 from rest_framework.pagination import PageNumberPagination
+
+
+class ReviewPagination(PageNumberPagination):
+    page_size = 15
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 from rest_framework import viewsets, filters, status, serializers
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
@@ -369,6 +377,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = ReviewSerializer
+    pagination_class = ReviewPagination
 
     def get_permissions(self):
         if self.action in ("create", "update", "partial_update", "destroy"):
