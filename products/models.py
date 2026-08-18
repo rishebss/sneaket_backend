@@ -1,6 +1,9 @@
 from cloudinary.models import CloudinaryField  # Add this import
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models import Avg
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 from django.conf import settings
 
 
@@ -209,3 +212,52 @@ class CartItem(models.Model):
         return (
             f"{self.user.username} - {self.sneaker.name}{size_label} x{self.quantity}"
         )
+
+
+class Review(models.Model):
+    """
+    User-submitted product review. One review per user per sneaker.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="reviews",
+    )
+    sneaker = models.ForeignKey(
+        Sneaker, on_delete=models.CASCADE, related_name="reviews"
+    )
+    rating = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
+    title = models.CharField(max_length=120, blank=True)
+    comment = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = ["user", "sneaker"]
+
+    def __str__(self):
+        return f"{self.user.username} → {self.sneaker.name} ({self.rating}★)"
+
+
+def _update_sneaker_rating(sneaker):
+    """Recompute the sneaker's cached average rating + review count."""
+    agg = Review.objects.filter(sneaker=sneaker).aggregate(
+        avg=Avg("rating"), count=models.Count("id")
+    )
+    sneaker.review_count = agg["count"] or 0
+    sneaker.rating = round(agg["avg"], 2) if agg["avg"] else None
+    sneaker.save(update_fields=["review_count", "rating", "updated_at"])
+
+
+@receiver(post_save, sender=Review)
+def _review_saved(sender, instance, **kwargs):
+    _update_sneaker_rating(instance.sneaker)
+
+
+@receiver(post_delete, sender=Review)
+def _review_deleted(sender, instance, **kwargs):
+    _update_sneaker_rating(instance.sneaker)

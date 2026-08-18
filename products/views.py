@@ -11,10 +11,16 @@ from django_filters.rest_framework import (
 )
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
-from .models import Sneaker, Favorite, CartItem
-from .serializers import SneakerSerializer, FavoriteSerializer, CartItemSerializer
-from rest_framework.permissions import IsAuthenticated
+from .models import Sneaker, Favorite, CartItem, Review
+from .serializers import (
+    SneakerSerializer,
+    FavoriteSerializer,
+    CartItemSerializer,
+    ReviewSerializer,
+)
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 
 
 class CustomPagination(PageNumberPagination):
@@ -350,3 +356,60 @@ class CartViewSet(viewsets.ModelViewSet):
 
     def _total_quantity(self):
         return self.get_queryset().aggregate(total=Sum("quantity"))["total"] or 0
+
+
+class ReviewViewSet(viewsets.ModelViewSet):
+    """
+    Product reviews.
+      GET    /api/reviews/?sneaker=<id>  -> list reviews for a sneaker
+      POST   /api/reviews/                -> create / update own review (upsert)
+      GET    /api/reviews/<id>/           -> retrieve a review
+      PATCH  /api/reviews/<id>/           -> edit own review
+      DELETE /api/reviews/<id>/           -> delete own review
+    """
+
+    serializer_class = ReviewSerializer
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "partial_update", "destroy"):
+            return [IsAuthenticated()]
+        return [AllowAny()]
+
+    def get_queryset(self):
+        queryset = Review.objects.select_related("user", "sneaker").all()
+        sneaker_id = self.request.query_params.get("sneaker")
+        if sneaker_id:
+            queryset = queryset.filter(sneaker_id=sneaker_id)
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def perform_update(self, serializer):
+        if serializer.instance.user != self.request.user:
+            raise PermissionDenied("You can only edit your own review.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.user != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied("You can only delete your own review.")
+        instance.delete()
+
+    def create(self, request, *args, **kwargs):
+        """
+        Upsert: if the user already reviewed this sneaker, update it instead
+        of creating a duplicate.
+        """
+        sneaker_id = request.data.get("sneaker")
+        if not sneaker_id:
+            return Response(
+                {"error": "sneaker is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        sneaker = get_object_or_404(Sneaker, id=sneaker_id)
+        existing = Review.objects.filter(user=request.user, sneaker=sneaker).first()
+        if existing:
+            serializer = self.get_serializer(existing, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return super().create(request, *args, **kwargs)

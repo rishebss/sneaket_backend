@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Sneaker, Favorite, CartItem
+from .models import Sneaker, Favorite, CartItem, Review
 from django.conf import settings
 
 
@@ -88,3 +88,26 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     def get_line_total(self, obj):
         return float(obj.sneaker.price) * obj.quantity
+
+
+class ReviewSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+    first_name = serializers.CharField(source="user.first_name", read_only=True)
+    last_name = serializers.CharField(source="user.last_name", read_only=True)
+
+    class Meta:
+        model = Review
+        fields = [
+            "id",
+            "user",
+            "username",
+            "first_name",
+            "last_name",
+            "sneaker",
+            "rating",
+            "title",
+            "comment",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "user", "created_at", "updated_at"]
