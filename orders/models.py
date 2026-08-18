@@ -1,5 +1,19 @@
+from datetime import timedelta
+
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
+
+
+def add_working_days(start_date, working_days):
+    """Return the date `working_days` business days after `start_date` (excludes weekends)."""
+    current = start_date
+    count = 0
+    while count < working_days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:  # Monday=0 ... Friday=4
+            count += 1
+    return current
 
 
 class Order(models.Model):
@@ -9,6 +23,7 @@ class Order(models.Model):
         ("processing", "Processing"),
         ("shipped", "Shipped"),
         ("delivered", "Delivered"),
+        ("delivery", "Delivery"),
         ("cancellation_requested", "Cancellation Requested"),
         ("cancellation_approved", "Cancellation Approved"),
         ("cancelled", "Cancelled"),
@@ -72,11 +87,33 @@ class Order(models.Model):
     cancellation_approved_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(blank=True, default="")
 
+    # Delivery
+    delivery_date = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not self.delivery_date:
+            self.delivery_date = add_working_days(timezone.localdate(), 7)
+        super().save(*args, **kwargs)
+
+    def get_effective_status(self):
+        """
+        Auto-progress a confirmed order based on time since it was placed:
+          - day 4+ -> shipped (cancel window closed)
+          - day 7+ -> delivery (out for delivery)
+        """
+        if self.status == "confirmed":
+            days = (timezone.localdate() - self.created_at.date()).days
+            if days >= 7:
+                return "delivery"
+            if days >= 4:
+                return "shipped"
+        return self.status
 
     def __str__(self):
         return f"{self.order_number} - {self.user.username}"

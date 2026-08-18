@@ -19,6 +19,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -39,12 +40,16 @@ class OrderSerializer(serializers.ModelSerializer):
             "shipping_fee",
             "total",
             "razorpay_order_id",
+            "delivery_date",
             "created_at",
             "cancellation_requested_at",
             "cancellation_approved_at",
             "cancellation_reason",
             "items",
         ]
+
+    def get_status(self, obj):
+        return obj.get_effective_status()
 
 
 class CreateOrderSerializer(serializers.Serializer):
