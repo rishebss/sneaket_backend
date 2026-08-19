@@ -10,10 +10,6 @@ from .models import Order, OrderItem, PendingCheckout
 def approve_cancellation(modeladmin, request, queryset):
     for order in queryset.filter(status="cancellation_requested"):
         with transaction.atomic():
-            for item in order.items.select_related("sneaker").select_for_update():
-                sneaker = Sneaker.objects.select_for_update().get(id=item.sneaker_id)
-                sneaker.copies = sneaker.copies + item.quantity
-                sneaker.save(update_fields=["copies", "updated_at"])
             order.status = "cancellation_approved"
             order.cancellation_approved_at = timezone.now()
             order.save(

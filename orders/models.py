@@ -99,6 +99,29 @@ class Order(models.Model):
     def save(self, *args, **kwargs):
         if self._state.adding and not self.delivery_date:
             self.delivery_date = add_working_days(timezone.localdate(), 7)
+        # Return sold inventory to stock exactly once when an order is
+        # approved for cancellation (covers admin action, API, and manual
+        # status edits alike).
+        if not self._state.adding and self.status == "cancellation_approved":
+            from django.db import transaction
+
+            from products.models import Sneaker
+
+            old_status = (
+                Order.objects.filter(pk=self.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            if old_status and old_status != "cancellation_approved":
+                with transaction.atomic():
+                    for item in self.items.select_related(
+                        "sneaker"
+                    ).select_for_update():
+                        sneaker = Sneaker.objects.select_for_update().get(
+                            id=item.sneaker_id
+                        )
+                        sneaker.copies = sneaker.copies + item.quantity
+                        sneaker.save(update_fields=["copies", "updated_at"])
         super().save(*args, **kwargs)
 
     def get_effective_status(self):

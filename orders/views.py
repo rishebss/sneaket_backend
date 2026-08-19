@@ -421,12 +421,6 @@ class ApproveCancelView(APIView):
             )
 
         with transaction.atomic():
-            # Restock the sold inventory exactly once
-            for item in order.items.select_related("sneaker").select_for_update():
-                sneaker = Sneaker.objects.select_for_update().get(id=item.sneaker_id)
-                sneaker.copies = sneaker.copies + item.quantity
-                sneaker.save(update_fields=["copies", "updated_at"])
-
             order.status = "cancellation_approved"
             order.cancellation_approved_at = timezone.now()
 
