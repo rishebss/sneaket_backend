@@ -35,6 +35,14 @@ class Sneaker(models.Model):
         ("other", "Other"),
     ]
 
+    # Silhouette choices (low/mid/high top) — used to filter recommendations
+    # like "low flat sneakers" vs "high top".
+    SILHOUETTE_CHOICES = [
+        ("low", "Low Top"),
+        ("mid", "Mid Top"),
+        ("high", "High Top"),
+    ]
+
     # Size choices (US sizes)
     SIZE_CHOICES = [
         ("5", "US 5"),
@@ -71,6 +79,13 @@ class Sneaker(models.Model):
     name = models.CharField(max_length=200)
     brand = models.CharField(max_length=50, choices=BRAND_CHOICES)
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
+    silhouette = models.CharField(
+        max_length=10,
+        choices=SILHOUETTE_CHOICES,
+        null=True,
+        blank=True,
+        help_text="Silhouette: low / mid / high top",
+    )
 
     # Pricing & Inventory
     price = models.DecimalField(

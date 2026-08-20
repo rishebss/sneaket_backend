@@ -115,6 +115,48 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_products",
+            "description": "Search and filter the SNEAKET catalog by free-text, brand, category, feature tag, or silhouette (low/mid/high top). Use this for product recommendations and filtered requests like 'low flat sneakers', 'red nike', or 'basketball shoes'. Always prefer this over answering from memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search": {
+                        "type": "string",
+                        "description": "Free-text query matched against name, brand, and description.",
+                    },
+                    "brand": {
+                        "type": "string",
+                        "description": "Brand slug, e.g. 'nike', 'adidas', 'reebok'.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category slug, e.g. 'lifestyle', 'basketball', 'running'.",
+                    },
+                    "feature": {
+                        "type": "string",
+                        "description": "Feature tag slug, e.g. 'new_arrival', 'best_seller', 'value_for_money'.",
+                    },
+                    "silhouette": {
+                        "type": "string",
+                        "enum": ["low", "mid", "high"],
+                        "description": "Silhouette: 'low' (low top), 'mid' (mid top), 'high' (high top).",
+                    },
+                    "in_stock": {
+                        "type": "boolean",
+                        "description": "If true, only return products with stock.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max products to return (default 8).",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_wallet",
             "description": "Show wallet balance and whether today's daily reward is claimed.",
             "parameters": {"type": "object", "properties": {}, "required": []},
@@ -132,7 +174,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "add_to_cart",
-            "description": "Add a product to the user's cart. Resolve the product from a name/brand query.",
+            "description": "Add a product to the user's cart. Resolve the product from a name/brand query. IMPORTANT: always pass `size` when the product has multiple sizes. If `size` is omitted for a product with several sizes, the tool will ask the user which size to pick instead of guessing.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -142,7 +184,7 @@ TOOLS = [
                     },
                     "size": {
                         "type": "string",
-                        "description": "US size, e.g. '9'. Picks a default if omitted.",
+                        "description": "US size, e.g. '9'. Required when the product has multiple sizes; omit only for single-size products.",
                     },
                     "quantity": {
                         "type": "integer",
@@ -379,19 +421,7 @@ def track_order(user, args):
 def list_new_products(user, args):
     limit = min(int(args.get("limit") or 5), 20)
     sneakers = Sneaker.objects.filter(is_active=True).order_by("-created_at")[:limit]
-    data = [
-        {
-            "id": s.id,
-            "name": s.name,
-            "brand": s.brand,
-            "category": s.category,
-            "price": str(s.price),
-            "original_price": str(s.original_price) if s.original_price else "",
-            "img": s.image_list[0] if s.image_list else "",
-            "features": s.features,
-        }
-        for s in sneakers
-    ]
+    data = [_product_card(s) for s in sneakers]
     if not data:
         return {
             "reply": "No products are available right now.",
@@ -400,6 +430,60 @@ def list_new_products(user, args):
         }
     return {
         "reply": "Here are the latest drops on SNEAKET.",
+        "ui": {"type": "products", "data": data},
+        "redirect": {"label": "Browse Products", "path": "/products"},
+    }
+
+
+def _product_card(s):
+    return {
+        "id": s.id,
+        "name": s.name,
+        "brand": s.brand,
+        "category": s.category,
+        "silhouette": s.silhouette or "",
+        "price": str(s.price),
+        "original_price": str(s.original_price) if s.original_price else "",
+        "img": s.image_list[0] if s.image_list else "",
+        "features": s.features,
+    }
+
+
+def search_products(user, args):
+    search = (args.get("search") or "").strip()
+    brand = (args.get("brand") or "").strip().lower() or None
+    category = (args.get("category") or "").strip().lower() or None
+    feature = (args.get("feature") or "").strip().lower() or None
+    silhouette = (args.get("silhouette") or "").strip().lower() or None
+    in_stock = bool(args.get("in_stock"))
+
+    qs = Sneaker.objects.filter(is_active=True)
+    if search:
+        qs = qs.filter(
+            Q(name__icontains=search)
+            | Q(brand__icontains=search)
+            | Q(description__icontains=search)
+        )
+    if brand:
+        qs = qs.filter(brand=brand)
+    if category:
+        qs = qs.filter(category=category)
+    if feature:
+        qs = qs.filter(features__contains=[feature])
+    if silhouette:
+        qs = qs.filter(silhouette=silhouette)
+    if in_stock:
+        qs = qs.filter(copies__gt=0)
+    sneakers = qs.order_by("-created_at")[: min(int(args.get("limit") or 8), 20)]
+    data = [_product_card(s) for s in sneakers]
+    if not data:
+        return {
+            "reply": "I couldn't find any products matching that. Try a different brand, category, or feature?",
+            "ui": {"type": "products", "data": []},
+            "redirect": {"label": "Browse Products", "path": "/products"},
+        }
+    return {
+        "reply": f"Found {len(data)} matching product(s).",
         "ui": {"type": "products", "data": data},
         "redirect": {"label": "Browse Products", "path": "/products"},
     }
@@ -447,9 +531,25 @@ def add_to_cart(user, args):
             "ui": None,
             "redirect": {"label": "Browse Products", "path": "/products"},
         }
-    size = args.get("size") or (
-        sneaker.available_sizes[0] if sneaker.available_sizes else None
-    )
+    requested_size = args.get("size")
+    available = list(sneaker.available_sizes or [])
+    if not requested_size:
+        # Never guess a size when several are available — ask the user instead.
+        if len(available) > 1:
+            return {
+                "reply": (
+                    f"**{sneaker.name}** is available in US sizes "
+                    f"{', '.join(str(s) for s in available)}. Which size would you like?"
+                ),
+                "ui": None,
+                "redirect": {
+                    "label": "View Product",
+                    "path": f"/products/{sneaker.id}",
+                },
+            }
+        size = available[0] if available else None
+    else:
+        size = requested_size
     qty = max(int(args.get("quantity") or 1), 1)
     if sneaker.copies < qty:
         return {
@@ -840,6 +940,7 @@ def execute_tool(name, args, user):
         "view_order": view_order,
         "track_order": track_order,
         "list_new_products": list_new_products,
+        "search_products": search_products,
         "view_wallet": view_wallet,
         "claim_daily_reward": claim_daily_reward,
         "add_to_cart": add_to_cart,
