@@ -496,3 +496,32 @@ class RefundToWalletView(APIView):
             order.save(update_fields=["status", "payment_status", "updated_at"])
 
         return Response({"success": True, "amount": str(order.total)})
+
+
+# Statuses from which a user may remove (hard-delete) an order from their list.
+REMOVABLE_STATUSES = ("refunded", "cancelled")
+
+
+class RemoveOrderView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, order_number):
+        try:
+            order = Order.objects.get(order_number=order_number, user=request.user)
+        except Order.DoesNotExist:
+            return Response(
+                {"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if order.status not in REMOVABLE_STATUSES:
+            return Response(
+                {
+                    "error": "Only refunded or cancelled orders can be removed",
+                    "status": order.status,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Cascades to OrderItem rows (on_delete=CASCADE).
+        order.delete()
+        return Response({"success": True})

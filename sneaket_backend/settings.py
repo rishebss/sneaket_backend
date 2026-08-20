@@ -16,17 +16,27 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables from backend/.env BEFORE any settings read them.
+# Explicit path so we don't accidentally pick up a parent-directory .env.
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(BASE_DIR.parent, ".env"))
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-p^a*l)s95etvl1to))$b%r0%4k@)&r_heo#ss@9=z$_#bcuc-^"
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY", "django-insecure-p^a*l)s95etvl1to))$b%r0%4k@)&r_heo#ss@9=z$_#bcuc-^"
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get("ALLOWED_HOSTS", "*").split(",") if h.strip()
+]
 
 
 # Application definition
@@ -77,12 +87,12 @@ LOGOUT_REDIRECT_URL = "/"
 
 # CORS settings (for React frontend)
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174",
-    "http://127.0.0.1:3000",
-    "https://sneaket.vercel.app",
+    o.strip()
+    for o in os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://127.0.0.1:3000,https://sneaket.vercel.app",
+    ).split(",")
+    if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -127,18 +137,16 @@ WSGI_APPLICATION = "sneaket_backend.wsgi.application"
 #     }
 # }
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "neondb",
-        "USER": "neondb_owner",
-        "PASSWORD": "npg_VnJYZ4S0vtfO",
-        "HOST": "ep-jolly-lake-a17vp26a-pooler.ap-southeast-1.aws.neon.tech",
-        "PORT": "5432",
+        "NAME": os.environ.get("DB_NAME", "neondb"),
+        "USER": os.environ.get("DB_USER", "neondb_owner"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", "npg_VnJYZ4S0vtfO"),
+        "HOST": os.environ.get(
+            "DB_HOST", "ep-jolly-lake-a17vp26a-pooler.ap-southeast-1.aws.neon.tech"
+        ),
+        "PORT": os.environ.get("DB_PORT", "5432"),
         "OPTIONS": {"sslmode": "require"},
         "CONN_MAX_AGE": 0,
     }
@@ -207,8 +215,16 @@ STATIC_URL = "/static/"
 STATICFILES_STORAGE = "cloudinary_storage.storage.StaticHashedCloudinaryStorage"
 
 # Razorpay (test mode keys)
-RAZORPAY_KEY_ID = "rzp_test_dTWp25pBQ5jW81"
-RAZORPAY_KEY_SECRET = "Sg6ymJfWNf4atGBsqXhuaALE"
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_dTWp25pBQ5jW81")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "Sg6ymJfWNf4atGBsqXhuaALE")
+
+# Cloudflare AI Worker (tool-calling proxy) configuration.
+# The worker only enforces X-Internal-Key auth if AI_WORKER_SECRET is set on its
+# own env, so set BOTH sides to the same value to enable the shared-secret guard.
+CLOUDFLARE_AI_ENDPOINT = os.environ.get(
+    "CLOUDFLARE_AI_ENDPOINT", "https://tes-ai.revetleafing123.workers.dev"
+)
+AI_WORKER_SECRET = os.environ.get("AI_WORKER_SECRET", "")
 
 # Caching Configuration
 CACHES = {
