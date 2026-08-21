@@ -11,6 +11,7 @@ Tool result shape returned to ChatView:
     { "reply": str, "ui": dict | None, "redirect": dict | None }
 """
 
+import re
 import razorpay
 from decimal import Decimal
 from django.conf import settings
@@ -116,7 +117,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_products",
-            "description": "Search and filter the SNEAKET catalog by free-text, brand, category, feature tag, or silhouette (low/mid/high top). Use this for product recommendations and filtered requests like 'low flat sneakers', 'red nike', or 'basketball shoes'. Always prefer this over answering from memory.",
+            "description": "Search and filter the SNEAKET catalog by free-text, brand, category, feature tag, silhouette (low/mid/high top), or PRICE. Use this for product recommendations and filtered requests like 'low flat sneakers', 'red nike', 'basketball shoes', or budget limits like 'under 2k' / 'budget 2000'. Always prefer this over answering from memory. For a budget, use max_price (e.g. 2000 for '2k' or 'under 2k').",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -140,6 +141,14 @@ TOOLS = [
                         "type": "string",
                         "enum": ["low", "mid", "high"],
                         "description": "Silhouette: 'low' (low top), 'mid' (mid top), 'high' (high top).",
+                    },
+                    "max_price": {
+                        "type": "number",
+                        "description": "Maximum price in INR. For '2k' / 'under 2k' pass 2000. Filters out products above this.",
+                    },
+                    "min_price": {
+                        "type": "number",
+                        "description": "Minimum price in INR.",
                     },
                     "in_stock": {
                         "type": "boolean",
@@ -237,21 +246,21 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "checkout",
-            "description": "Checkout the selected cart items. REQUIRES user confirmation. payment_method is 'wallet' or 'online'.",
+            "description": "Checkout the selected cart items and place the order. REQUIRES user confirmation (the system shows a Confirm/Cancel button before any charge). payment_method is 'wallet' or 'online' — if the user didn't say, omit it and the system defaults to 'online' (Razorpay).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "payment_method": {
                         "type": "string",
                         "enum": ["wallet", "online"],
-                        "description": "How to pay: 'wallet' (instant) or 'online' (Razorpay).",
+                        "description": "How to pay: 'wallet' (instant, charged from balance) or 'online' (Razorpay). Optional — defaults to 'online'.",
                     },
                     "address_id": {
                         "type": "integer",
                         "description": "Saved address id to ship to (optional)",
                     },
                 },
-                "required": ["payment_method"],
+                "required": [],
             },
         },
     },
@@ -449,29 +458,111 @@ def _product_card(s):
     }
 
 
+# Conversational filler the model may leak into brand/search args.
+_FILLER = {
+    "may",
+    "be",
+    "maybe",
+    "i",
+    "think",
+    "prefer",
+    "want",
+    "like",
+    "some",
+    "or",
+    "and",
+    "a",
+    "an",
+    "the",
+    "to",
+    "for",
+    "of",
+    "with",
+    "from",
+    "any",
+    "could",
+    "would",
+    "please",
+    "show",
+    "me",
+    "get",
+    "need",
+    "looking",
+}
+
+
+def _split_multi(val):
+    """Split a user-style multi-value ('adidas or nike', 'red, black',
+    'may be adidas or nike') into clean parts, dropping filler words."""
+    if not val:
+        return []
+    parts = re.split(r",|/| or | and | or|and", str(val), flags=re.IGNORECASE)
+    out = []
+    for p in parts:
+        words = [w for w in re.split(r"\s+", p.strip()) if w.lower() not in _FILLER]
+        cleaned = " ".join(words).strip()
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def _parse_price(val):
+    """Parse a price arg that may be a number, '2k', '2.5k', or '2000'."""
+    if val is None:
+        return None
+    s = str(val).strip().lower().replace(",", "").replace("₹", "").replace("rs", "")
+    if not s:
+        return None
+    mult = 1
+    if s.endswith("k"):
+        mult = 1000
+        s = s[:-1].strip()
+    if s.endswith("l") or s.endswith("lac"):
+        mult = 100000
+        s = s[:-1].replace("ac", "").strip()
+    try:
+        return float(s) * mult
+    except ValueError:
+        return None
+
+
 def search_products(user, args):
     search = (args.get("search") or "").strip()
-    brand = (args.get("brand") or "").strip().lower() or None
+    brand = (args.get("brand") or "").strip()
     category = (args.get("category") or "").strip().lower() or None
     feature = (args.get("feature") or "").strip().lower() or None
     silhouette = (args.get("silhouette") or "").strip().lower() or None
     in_stock = bool(args.get("in_stock"))
+    max_price = _parse_price(args.get("max_price"))
+    min_price = _parse_price(args.get("min_price"))
 
     qs = Sneaker.objects.filter(is_active=True)
-    if search:
-        qs = qs.filter(
-            Q(name__icontains=search)
-            | Q(brand__icontains=search)
-            | Q(description__icontains=search)
-        )
-    if brand:
-        qs = qs.filter(brand=brand)
+    search_terms = _split_multi(search)
+    brand_terms = _split_multi(brand)
+    if search_terms:
+        q = Q()
+        for t in search_terms:
+            q |= (
+                Q(name__icontains=t)
+                | Q(brand__icontains=t)
+                | Q(description__icontains=t)
+            )
+        qs = qs.filter(q)
+    if brand_terms:
+        qb = Q()
+        for b in brand_terms:
+            qb |= Q(brand__iexact=b) | Q(brand__icontains=b)
+        qs = qs.filter(qb)
     if category:
         qs = qs.filter(category=category)
     if feature:
         qs = qs.filter(features__contains=[feature])
     if silhouette:
         qs = qs.filter(silhouette=silhouette)
+    if min_price is not None:
+        qs = qs.filter(price__gte=min_price)
+    if max_price is not None:
+        qs = qs.filter(price__lte=max_price)
     if in_stock:
         qs = qs.filter(copies__gt=0)
     sneakers = qs.order_by("-created_at")[: min(int(args.get("limit") or 8), 20)]
@@ -881,7 +972,7 @@ def checkout(user, args):
                 sneaker.save(update_fields=["copies", "updated_at"])
             CartItem.objects.filter(user=user, id__in=cart_item_ids).delete()
         return {
-            "reply": f"Order placed! **{order.order_number}** is confirmed and paid from your wallet (₹{total:,.2f}).",
+            "reply": f"Your order **{order.order_number}** is confirmed and paid from your wallet (₹{total:,.2f}).",
             "ui": {
                 "type": "checkout_result",
                 "data": {

@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.parse
 
 import requests
@@ -30,6 +31,7 @@ class ChatView(APIView):
     def _get_cart_context(self, user):
         from products.models import CartItem
 
+        today = timezone.localdate()
         cart_items = CartItem.objects.filter(user=user).select_related("sneaker")
         items = [
             {
@@ -39,6 +41,8 @@ class ChatView(APIView):
                 "qty": ci.quantity,
                 "price": str(ci.sneaker.price),
                 "line_total": str(float(ci.sneaker.price) * ci.quantity),
+                "added_at": ci.created_at.strftime("%Y-%m-%d"),
+                "days_in_cart": (today - ci.created_at.date()).days,
             }
             for ci in cart_items
         ]
@@ -111,7 +115,7 @@ class ChatView(APIView):
             {"label": "View Orders", "path": "/accounts?tab=orders", "type": "static"},
         ),
         (
-            ("cart", "basket", "checkout"),
+            ("cart", "basket"),
             {"label": "View Cart", "path": "/cart", "type": "static"},
         ),
         (
@@ -149,10 +153,19 @@ class ChatView(APIView):
     _CATEGORIES = {c.lower(): c for c, _ in Sneaker.CATEGORY_CHOICES}
     _FEATURES = {f.lower(): f for f, _ in Sneaker.FEATURE_CHOICES}
 
+    @staticmethod
+    def _kw_match(text, keyword):
+        # Word-boundary match so 'account' inside another word, or a passing
+        # mention, doesn't fire a navigational button. Handles whitespace and
+        # common punctuation around the keyword.
+        return bool(
+            re.search(r"(?<![a-z0-9])" + re.escape(keyword) + r"(?![a-z0-9])", text)
+        )
+
     def _detect_redirect(self, message):
         text = (message or "").lower()
         for keywords, rule in self.REDIRECT_RULES:
-            if any(k in text for k in keywords):
+            if any(self._kw_match(text, k) for k in keywords):
                 if rule.get("type") == "products":
                     return self._build_product_redirect(message, rule["label"])
                 return {"label": rule["label"], "path": rule["path"]}
@@ -163,13 +176,12 @@ class ChatView(APIView):
             "sneakers",
             "kicks",
             "trainers",
-            "pair of",
         )
         if (
             self._mentions_value(text, self._BRANDS)
             or self._mentions_value(text, self._CATEGORIES)
             or self._mentions_value(text, self._FEATURES)
-            or any(w in text for w in generic)
+            or any(self._kw_match(text, w) for w in generic)
         ):
             return self._build_product_redirect(message, "Browse Products")
         return None
@@ -177,7 +189,8 @@ class ChatView(APIView):
     @staticmethod
     def _mentions_value(text, mapping):
         for key in mapping:
-            if key.replace("_", " ") in text or key in text:
+            kw = key.replace("_", " ")
+            if ChatView._kw_match(text, kw) or ChatView._kw_match(text, key):
                 return True
         return False
 
@@ -244,6 +257,20 @@ class ChatView(APIView):
             "You are SNEAKET AI, the official assistant for SNEAKET, a sneaker e-commerce app. "
             "Help users with product recommendations, cart inquiries, order status, daily login rewards, "
             "and general shopping help. Be concise, friendly, and use the provided context to personalize answers. "
+            "Each cart item in the context includes `added_at` and `days_in_cart` — use these to answer 'how long has X been in my cart' or similar questions rather than saying you don't know. "
+            "You are SNEAKET AI, a friendly, CHATTY sneaker stylist — not a search box. "
+            "Be conversational and personable: share a quick opinion or insight, then ASK a natural follow-up question "
+            "to keep the dialogue going (e.g. 'want me to check our collection?', 'any brand you prefer?', 'what's your budget?'). "
+            "You are also an AUTONOMOUS agent: think through the user's intent using your own sneaker knowledge, then use the "
+            "tools to VERIFY against the live catalog before answering. Do not wait to be told how to interpret a request.\n\n"
+            "CONVERSATION STYLE:\n"
+            "- For open-ended or advice questions (e.g. 'best sneaker for a 5'7 guy', 'what suits me?'), do NOT immediately call a "
+            "tool and dump a product list. First reply with a brief, friendly insight or opinion and ASK a follow-up question. "
+            "Only search the catalog once the user shows interest or says yes — then present a curated set of 2-4 picks with a short "
+            "reason each (e.g. 'these have thick soles that add height').\n"
+            "- Keep replies short and human; end advice turns with a question so the user wants to continue.\n"
+            "- Never force a single forced result — if you search, aim to show a small relevant set, and broaden the search term "
+            "(e.g. 'Air Max', 'platform', high-top silhouette) rather than one specific product name.\n\n"
             "If you lack the data to answer something, say you can't check that right now.\n\n"
             "ACTION TOOLS: You can perform actions for the user by calling the provided tools. "
             "Use a tool whenever the user wants to: view their cart, view/list/track orders, see new products, "
@@ -251,7 +278,12 @@ class ChatView(APIView):
             "order to their wallet, remove order(s) from their list, or checkout. "
             "Pass accurate arguments — use REAL order numbers from the context, never invent them. "
             "For 'cancel' or 'checkout' the system will ask the user to confirm before executing; you may still call the tool. "
-            "For free-form questions with no clear action, just reply conversationally.\n\n"
+            "When the user wants to CHECKOUT, PLACE, or CONFIRM their cart order — e.g. 'checkout', 'place my order', "
+            "'confirm my order', 'buy my cart' — you MUST call the `checkout` tool (do not just describe the cart or only "
+            "show a View Cart link). If they didn't specify a payment method, call `checkout` without payment_method "
+            "(it defaults to online); the confirm step lets them cancel. "
+            "For free-form questions with no clear action, just reply conversationally. "
+            "NEVER reply with 'I don't have the necessary tools' or 'I can't assist with that' — always attempt a helpful answer using the tools and context you have.\n\n"
             "PRODUCT RECOMMENDATIONS:\n"
             "- When the user asks for sneaker suggestions, 'any other', 'more options', or alternatives, call "
             "`list_new_products` or `search_products` and present what they return — do NOT answer 'I can't check that right now'.\n"
@@ -259,7 +291,22 @@ class ChatView(APIView):
             "'red nike'), use `search_products` with the relevant filters — never answer from memory.\n"
             "- Only recommend products returned by the tools or the live context; never invent products.\n"
             "- Do not assert attributes the catalog data does not contain. If the user filters by something the "
-            "catalog can't express, say so and show the available options instead.\n"
+            "catalog can't express, say so AND show the available options instead — never refuse.\n"
+            "- You have general sneaker knowledge (e.g. thick/Platform/chunky soles and high-tops add height, certain "
+            "silhouettes suit certain uses). For subjective or physical requests the catalog can't directly filter "
+            "(e.g. 'boost my height', 'make me look taller', 'best for wide feet'), DO NOT refuse. Instead: "
+            "(1) reason about which styles fit from your own knowledge, then (2) SEARCH the catalog with "
+            "`search_products` using concrete terms (product names like 'Run Star Hike', brands, 'platform', 'chunky', "
+            "silhouette) to verify what's actually available, and (3) present only the matches with a short explanation "
+            "of why each fits the user's intent. Never invent products — only show what the search returns.\n"
+            "- HEIGHT ADVICE (get this right, do not contradict yourself): Thick/chunky/'Platform' soles and high-top "
+            "silhouettes ADD visual height. Recommend them when the user wants to look TALLER or says they are on the "
+            "SHORTER side. If the user is already TALL, or wants a sleek/streamlined look, recommend LOW-PROFILE, "
+            "minimal-soled, low-top sneakers — NEVER suggest platform/chunky soles to someone who wants to avoid looking "
+            "taller. Pair the silhouette advice with the height direction consistently.\n"
+            "- When the user mentions a BUDGET ('budget 2k', 'under 2000', 'around 1.5k'), call `search_products` with "
+            "`max_price` set to the numeric INR amount (convert '2k' -> 2000, '1.5k' -> 1500). Do NOT put the budget in the "
+            "free-text `search` field — that matches nothing. Combine with brand/silhouette if the user gave those too.\n"
             "- When adding to cart, always pass `size` for multi-size products (the tool will ask if you omit it).\n\n"
             "Formatting rules:\n"
             "- Keep replies short and scannable; avoid long preambles.\n"
@@ -422,6 +469,36 @@ class ChatView(APIView):
             name = tc.get("name")
             args = tc.get("arguments") or {}
             if name in tools.GATED_TOOLS:
+                # Checkout without a chosen payment method: offer both Wallet
+                # and Online as separate confirm tokens so the user picks at
+                # the confirmation step instead of defaulting blindly.
+                if name == "checkout" and not args.get("payment_method"):
+                    tok_wallet = self._make_confirm_token(
+                        name, {**args, "payment_method": "wallet"}
+                    )
+                    tok_online = self._make_confirm_token(
+                        name, {**args, "payment_method": "online"}
+                    )
+                    return Response(
+                        {
+                            "reply": "How would you like to pay for this order?",
+                            "action": {
+                                "type": "checkout_choice",
+                                "options": [
+                                    {
+                                        "label": "Pay with Wallet",
+                                        "confirm_token": tok_wallet,
+                                    },
+                                    {
+                                        "label": "Pay with Online (Razorpay)",
+                                        "confirm_token": tok_online,
+                                    },
+                                ],
+                            },
+                            "ui": None,
+                            "redirect": None,
+                        }
+                    )
                 token = self._make_confirm_token(name, args)
                 return Response(
                     {
