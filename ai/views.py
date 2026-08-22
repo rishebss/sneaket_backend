@@ -15,6 +15,8 @@ from . import tools
 
 MAX_HISTORY = 12
 MAX_MESSAGE_LENGTH = 2000
+MAX_TOOL_ITERATIONS = 4  # bound model<->tool round trips per chat turn
+# (search -> refine -> act -> final summary)
 
 # Signed, short-lived token carrying a pending (gated) action to its confirm step.
 CONFIRM_SALT = "ai-confirm-action"
@@ -252,6 +254,47 @@ class ChatView(APIView):
             path = "/products"
         return {"label": label, "path": path}
 
+    # ------------------------------------------------------------------
+    # Tool-result loop helpers
+    # ------------------------------------------------------------------
+    def _slim_tool_payload(self, ui):
+        """Compact JSON of a tool's ui payload, fed back to the model as a
+        role:'tool' message so it can reason over (and refine) the result."""
+        keep = {
+            "id",
+            "name",
+            "brand",
+            "category",
+            "silhouette",
+            "price",
+            "original_price",
+            "description",
+            "features",
+            "size",
+            "quantity",
+            "line_total",
+            "total",
+            "order_number",
+            "status",
+            "created_at",
+            "delivery_date",
+            "balance",
+            "daily_reward_claimed",
+        }
+
+        def slim(d):
+            if isinstance(d, list):
+                return [slim(x) for x in d]
+            if isinstance(d, dict):
+                return {k: v for k, v in d.items() if k in keep}
+            return d
+
+        if not isinstance(ui, dict):
+            return "{}"
+        return json.dumps(
+            {"type": ui.get("type"), "data": slim(ui.get("data"))}, default=str
+        )
+
     def _build_system_prompt(self, context):
         return (
             "You are SNEAKET AI, the official assistant for SNEAKET, a sneaker e-commerce app. "
@@ -307,7 +350,33 @@ class ChatView(APIView):
             "- When the user mentions a BUDGET ('budget 2k', 'under 2000', 'around 1.5k'), call `search_products` with "
             "`max_price` set to the numeric INR amount (convert '2k' -> 2000, '1.5k' -> 1500). Do NOT put the budget in the "
             "free-text `search` field — that matches nothing. Combine with brand/silhouette if the user gave those too.\n"
-            "- When adding to cart, always pass `size` for multi-size products (the tool will ask if you omit it).\n\n"
+            "- When adding to cart, always pass `size` for multi-size products (the tool will ask if you omit it). "
+            "For add/remove cart calls pass the EXACT full product name exactly as it appeared in search results or context (e.g. 'Blazer Mid 77 Red') — never paraphrase, shorten, or add model codes. "
+            "COLORWAYS ARE SEPARATE PRODUCTS: each colorway is its own catalog row with the color IN its name ('Blazer Mid 77 Red' ≠ 'Nike mid - blazzers 77'). "
+            "When the user asks for a specific colour, search_products with that colour term first, then use the matching product's exact name — NEVER add a differently-named product and claim it's the colour they asked for.\n\n"
+            "TOOL RESULT LOOP: after you call a read/search tool you receive its raw JSON result as a 'tool' message — READ it and reason over it. "
+            "Judge fit yourself from names/descriptions/features (the catalog has NO 'chunky'/'platform'/'height' field; silhouette is often empty, so "
+            "infer from words like 'platform', 'chunky', 'thick sole', 'high-top' in product text). "
+            "If results don't fit the request, call search_products AGAIN with broader/different terms (drop silhouette/category, shorten the term, keep brand/budget) instead of settling. "
+            "If a search returns ZERO matches, do NOT tell the user you found nothing — retry ONCE with broader filters; only after the broadened retry also fails may you say so and offer alternatives. "
+            "Your FINAL reply must reference the specific products you settled on by name and why each fits — grounded in tool results, never generic filler. "
+            "SCREEN EVERY PICK: drop any returned product whose name/description contradicts what the user asked for (e.g. never include a 'platform'/'chunky' shoe in a low-profile request). "
+            "If truly nothing fits, say so honestly and suggest the closest alternatives.\n"
+            "GATED ACTIONS: for cancel_order / checkout / refund_order / remove_orders do NOT ask the user to confirm in your reply and don't summarize-and-wait — "
+            "call the tool IMMEDIATELY; SNEAKET shows Confirm/Cancel buttons automatically.\n"
+            "NEVER CLAIM AN ACTION HAPPENED unless a tool result message confirmed it: never say 'added to your cart', 'order placed', 'cancelled' etc. "
+            "before the corresponding tool has actually run — if you still need info (like size), ask for it, then call the tool once you have it.\n"
+            "ORDER LIFECYCLE (follow strictly):\n"
+            "- 'cancellation_requested': tell the user the team is reviewing; nothing else to do yet.\n"
+            "- 'cancellation_approved': proactively OFFER the refund — e.g. 'Good news, it's approved! Want me to refund ₹X to your wallet?' — and wait for their yes before calling refund_order.\n"
+            "- 'refunded': only NOW may you offer remove_orders to tidy up the order list. NEVER remove an order before it has been refunded.\n"
+            "To check any of these statuses use view_order or track_order with the order number first — never guess from memory.\n"
+            "SEARCH TRIGGERS: whenever the user names any brand or budget — even tentatively ('maybe adidas', 'around 1.5k') — call search_products with those filters rather than answering from memory.\n"
+            "QUERY HYGIENE (use your intelligence BEFORE calling tools): users type fast and messy ('check teh if nike midblazzer 77 mid red available'). "
+            "Translate, don't copy: fix typos ('teh'->'the', 'midblazzer'->'blazer', 'comdy cush'->'comfy cush'), split the request into intent + attributes "
+            "(brand='nike', model='blazer mid 77', colour='red', intent=availability), then build CLEAN tool arguments — the most distinctive 1-3 words as `search` "
+            "(e.g. 'blazer red') plus structured filters (brand/category/silhouette/max_price). NEVER paste the raw user sentence into `search`. "
+            "For 'is X available / do you have X' questions set in_stock=true and answer strictly from what the search returns — say it's unavailable if nothing matches.\n\n"
             "Formatting rules:\n"
             "- Keep replies short and scannable; avoid long preambles.\n"
             "- Use Markdown: **bold** for labels, '-' bullets for lists, numbered lists for steps.\n"
@@ -327,6 +396,22 @@ class ChatView(APIView):
         return signing.loads(token, salt=CONFIRM_SALT, max_age=300)
 
     def _confirm_prompt(self, name, args):
+        if name == "add_to_cart":
+            size = args.get("size")
+            qty = args.get("quantity") or 1
+            extra = (
+                f" (US {size}, x{qty})"
+                if size
+                else (" (x1)" if qty == 1 else f" (x{qty})")
+            )
+            return (
+                f"Add **{args.get('product_query')}**{extra} to your cart? "
+                "Tap Confirm to proceed."
+            )
+        if name == "remove_from_cart":
+            return f"Remove **{args.get('product_query')}** from your cart? Tap Confirm to proceed."
+        if name == "claim_daily_reward":
+            return "Claim your **₹25 daily reward**? Tap Confirm to proceed."
         if name == "cancel_order":
             return f"Are you sure you want to cancel order **{args.get('order_number')}**? Tap Confirm to proceed (you can tap Cancel to stop)."
         if name == "checkout":
@@ -452,23 +537,25 @@ class ChatView(APIView):
         context = self._build_context(request.user)
         system_prompt = self._build_system_prompt(context)
 
-        # Ask the model to decide a tool; it returns tool_calls or a reply.
-        data = self._call_worker(system_prompt, messages, None, tools.TOOLS)
-        if data is None:
-            return Response(
-                {
-                    "reply": "Sorry, I encountered an error connecting to the assistant. Please try again later.",
-                    "ui": None,
-                    "redirect": None,
-                }
-            )
+        # Agent loop: let the model call tools, execute non-gated ones, and
+        # feed their raw results back so it can reason over / refine them.
+        convo = list(messages)
+        last_result = None  # last executed tool result {reply, ui, redirect}
+        reply = None
 
-        tool_calls = data.get("tool_calls")
-        if tool_calls:
+        for _ in range(MAX_TOOL_ITERATIONS):
+            data = self._call_worker(system_prompt, convo, None, tools.TOOLS)
+            if data is None:
+                break
+            tool_calls = data.get("tool_calls")
+            if not tool_calls:
+                reply = data.get("reply")
+                break
             tc = tool_calls[0]
             name = tc.get("name")
             args = tc.get("arguments") or {}
             if name in tools.GATED_TOOLS:
+                # Gated actions never loop — the confirm-token flow returns now.
                 # Checkout without a chosen payment method: offer both Wallet
                 # and Online as separate confirm tokens so the user picks at
                 # the confirmation step instead of defaulting blindly.
@@ -490,7 +577,8 @@ class ChatView(APIView):
                                         "confirm_token": tok_wallet,
                                     },
                                     {
-                                        "label": "Pay with Online (Razorpay)",
+                                        "label": "Razorpay",
+                                        "icon": "/Razorpay.svg",
                                         "confirm_token": tok_online,
                                     },
                                 ],
@@ -509,21 +597,55 @@ class ChatView(APIView):
                     }
                 )
             result = tools.execute_tool(name, args, request.user)
-            return Response(
+            last_result = result
+            # Feed the raw result back; GLM accepts bare role:"tool" messages
+            # (assistant tool_calls echoes are rejected by its schema).
+            convo.append(
                 {
-                    "reply": result["reply"],
-                    "ui": result["ui"],
-                    "redirect": result["redirect"],
+                    "role": "tool",
+                    "name": name,
+                    "content": self._slim_tool_payload(result.get("ui")),
                 }
             )
 
-        # ---- Free-form fallback (no tool called) ----
-        reply = data.get("reply") or ("Sorry, I couldn't generate a response.")
-        redirect = self._detect_redirect(message)
-        return Response(
-            {
-                "reply": reply,
-                "context": context,
-                "redirect": redirect,
-            }
+        if not reply and last_result:
+            # Iteration cap or mid-loop worker failure: fall back to the last
+            # executed tool result (old single-shot behaviour).
+            return Response(
+                {
+                    "reply": last_result["reply"],
+                    "ui": last_result["ui"],
+                    "redirect": last_result["redirect"],
+                }
+            )
+        if not reply:
+            return Response(
+                {
+                    "reply": "Sorry, I encountered an error connecting to the assistant. Please try again later.",
+                    "ui": None,
+                    "redirect": None,
+                }
+            )
+
+        # Final grounded answer: the card reflects the result the model's
+        # reasoning settled on (possibly a refined search), not necessarily
+        # the first call. Legacy keyword redirect only fires on pure free-form
+        # turns — executors own their redirects after any tool ran.
+        redirect = (
+            last_result["redirect"] if last_result else self._detect_redirect(message)
         )
+        payload = {"reply": reply, "redirect": redirect}
+        if last_result:
+            ui = last_result["ui"]
+            # Don't ship an empty products card alongside an honest "nothing
+            # fits" reply — the raw card would render as a blank grid.
+            if (
+                isinstance(ui, dict)
+                and ui.get("type") == "products"
+                and not (ui.get("data") or [])
+            ):
+                ui = None
+            payload["ui"] = ui
+        else:
+            payload["context"] = context
+        return Response(payload)

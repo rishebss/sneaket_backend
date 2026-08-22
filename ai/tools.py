@@ -15,7 +15,7 @@ import re
 import razorpay
 from decimal import Decimal
 from django.conf import settings
-from django.db.models import Q
+from django.db.models import Case, When, IntegerField, Q
 from django.utils import timezone
 from django.db import transaction
 
@@ -31,7 +31,16 @@ from orders.views import generate_order_number, REMOVABLE_STATUSES
 CANCELABLE_STATUSES = ("confirmed", "processing", "shipped")
 
 # Tools whose execution is deferred behind a confirmation step.
-GATED_TOOLS = {"cancel_order", "checkout", "refund_order", "remove_orders"}
+# Every mutating tool is gated; read-only tools execute immediately.
+GATED_TOOLS = {
+    "add_to_cart",
+    "remove_from_cart",
+    "claim_daily_reward",
+    "cancel_order",
+    "checkout",
+    "refund_order",
+    "remove_orders",
+}
 
 # ---------------------------------------------------------------------------
 # Tool schemas (OpenAI-style; Django sends these to the Worker)
@@ -304,17 +313,44 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _resolve_sneaker(query):
-    """Best-effort product resolution from a free-text query."""
+def _rank_sneakers(query):
+    """Rank active catalog products for a free-text query, best first.
+    Each item is (Sneaker, sortkey) where sortkey = (idf-score, -rarest,
+    raw-hits). An exact (case-insensitive) name match short-circuits."""
     if not query:
-        return None
-    q = query.strip()
-    return (
-        Sneaker.objects.filter(is_active=True)
-        .filter(Q(name__icontains=q) | Q(brand__icontains=q))
-        .order_by("-created_at")
-        .first()
-    )
+        return []
+    qs = Sneaker.objects.filter(is_active=True)
+    exact = qs.filter(name__iexact=query.strip()).first()
+    if exact:
+        return [(exact, (float("inf"), 0, 99))]
+    tokens = [t for t in re.split(r"\s+", query.strip().lower()) if t]
+    all_names = [(s, f"{s.name} {s.brand}".lower()) for s in qs]
+    # IDF-style weighting: rare tokens ('red', 'blazzers') discriminate
+    # between near-duplicate names better than common ones ('nike', 'mid').
+    freq = {}
+    for _s, hay in all_names:
+        for t in set(tokens):
+            if t in hay:
+                freq[t] = freq.get(t, 0) + 1
+    phrase = " ".join(tokens)
+    scored = []
+    for s, hay in all_names:
+        raw = sum(1 for t in tokens if t in hay)
+        if not raw:
+            continue
+        score = sum(1.0 / freq.get(t, 1) for t in tokens if t in hay)
+        if phrase and phrase in hay:
+            score += len(tokens)
+        rarest = min((freq.get(t, 1) for t in tokens if t in hay), default=99)
+        scored.append((s, (score, -rarest, raw)))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
+def _resolve_sneaker(query):
+    """Resolve a free-text query to the single best-matching product."""
+    ranked = _rank_sneakers(query)
+    return ranked[0][0] if ranked else None
 
 
 def _wallet_state(user):
@@ -455,6 +491,7 @@ def _product_card(s):
         "original_price": str(s.original_price) if s.original_price else "",
         "img": s.image_list[0] if s.image_list else "",
         "features": s.features,
+        "description": (s.description or s.short_description or "")[:180],
     }
 
 
@@ -539,15 +576,45 @@ def search_products(user, args):
     qs = Sneaker.objects.filter(is_active=True)
     search_terms = _split_multi(search)
     brand_terms = _split_multi(brand)
+
+    def _term_q(term):
+        return (
+            Q(name__icontains=term)
+            | Q(brand__icontains=term)
+            | Q(description__icontains=term)
+        )
+
     if search_terms:
         q = Q()
         for t in search_terms:
-            q |= (
-                Q(name__icontains=t)
-                | Q(brand__icontains=t)
-                | Q(description__icontains=t)
-            )
-        qs = qs.filter(q)
+            q |= _term_q(t)
+        filtered = qs.filter(q)
+        if not filtered.exists() and len(search_terms) == 1:
+            # Full phrase matched nothing ("nike blazer mid 77 red") —
+            # fall back to word-level matching, but require at least TWO
+            # distinct word hits so a single generic word can't drag in the
+            # whole catalog (which made every card look like "latest drops").
+            words = [w for w in search_terms[0].split() if w.lower() not in _FILLER]
+            if len(words) > 1:
+                hits = {}
+                for w in words:
+                    wl = w.lower()
+                    for s in qs.order_by("-created_at"):
+                        hay = f"{s.name} {s.brand}".lower()
+                        if wl in hay:
+                            hits[s.id] = hits.get(s.id, 0) + 1
+                min_hits = min(2, len(words))
+                best_ids = [
+                    sid
+                    for sid, n in sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))
+                    if n >= min_hits
+                ][:20]
+                preserved = Case(
+                    *[When(id=i, then=pos) for pos, i in enumerate(best_ids)],
+                    output_field=IntegerField(),
+                )
+                filtered = qs.filter(id__in=best_ids).order_by(preserved)
+        qs = filtered
     if brand_terms:
         qb = Q()
         for b in brand_terms:
@@ -615,13 +682,27 @@ def claim_daily_reward(user, args):
 
 
 def add_to_cart(user, args):
-    sneaker = _resolve_sneaker(args.get("product_query", ""))
-    if not sneaker:
+    ranked = _rank_sneakers(args.get("product_query", ""))
+    if not ranked:
         return {
             "reply": "I couldn't find a product matching that. Try a brand or model name?",
             "ui": None,
             "redirect": {"label": "Browse Products", "path": "/products"},
         }
+    sneaker = ranked[0][0]
+    # Ambiguity guard: when a near-duplicate name scores almost as high as
+    # the best match ('mid blazzers red' vs 'Blazer Mid 77 Red'), ask the
+    # user instead of silently adding the wrong pair.
+    if len(ranked) > 1 and ranked[0][1][0] != float("inf"):
+        (s0, k0), (s1, k1) = ranked[0], ranked[1]
+        if k1[0] >= k0[0] * 0.9:
+            options = [_product_card(s) for s, _k in ranked[:3]]
+            names = " or ".join(f"**{x.name}** (₹{x.price})" for x in [s0, s1])
+            return {
+                "reply": f"I found close matches — did you mean {names}?",
+                "ui": {"type": "products", "data": options},
+                "redirect": None,
+            }
     requested_size = args.get("size")
     available = list(sneaker.available_sizes or [])
     if not requested_size:
